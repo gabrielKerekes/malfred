@@ -5,8 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Malfred: Ashen Ring</title>
 <link rel="stylesheet" href="style.css">
+<script type="importmap">
+{ "imports": { "three": "./vendor/three/three.module.min.js", "three/addons/": "./vendor/three/addons/" } }
+</script>
 </head>
 <body>
+<canvas id="gl" hidden></canvas>
 <canvas id="c"></canvas>
 
 <div id="menu" class="overlay">
@@ -64,6 +68,7 @@
     <h2>Menu</h2>
     <button id="btnResume" class="primary">Resume</button>
     <button id="btnSound">Sound: on (M)</button>
+    <button id="btnGfx">Graphics: 3D</button>
     <button id="btnLeave">Leave game</button>
     <p class="help">The match keeps running while this menu is open.</p>
     <p class="help"><a href="https://github.com/gabrielKerekes/malfred" target="_blank" rel="noopener">Made by Gabriel Kerekes · GitHub</a></p>

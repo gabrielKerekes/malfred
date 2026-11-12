@@ -1,6 +1,6 @@
 import { SPELLS, SPELL_KEYS, TICK } from '/shared/game.js';
 import { sfx, setListener, setSizzle, toggleMute, isMuted } from './audio.js';
-import { cam, toWorld, updateCamera, drawCameraHud, touchGesture } from './camera.js';
+import { cam, toWorld, updateCamera, drawCameraHud, touchGesture, setProjection } from './camera.js';
 import {
   drawLava, drawArena, drawZones, drawPlayers, drawProjectiles, drawEffects, drawVignette, drawBackdrop as paintBackdrop,
   fxEvent, resetFx, shakeOffset,
@@ -13,6 +13,7 @@ const KEYMAP = {};
 for (const k of SPELL_KEYS) KEYMAP[SPELLS[k].key.toLowerCase()] = k;
 const INTERP = 110; // ms of render delay used to smooth snapshots
 
+
 let ws = null, myId = 0, mode = '', code = '', host = 0, botsWanted = 0;
 let roster = new Map();
 let snaps = [];            // {time, s, P: Map}
@@ -23,6 +24,39 @@ let feed = [];             // {el, time}
 let mouse = { x: 0, y: 0, down: false, lastSend: 0 };
 let moveMark = null;
 let W = 0, H = 0;
+
+// ---------------- graphics: 3D (three.js, default) or 2D canvas ----------------
+// The WebGL canvas sits under #c; #c stays on top as the input surface and the
+// overlay for names, health bars and camera HUD.
+const glCanvas = $('gl');
+let gfx = '3d';
+try { gfx = localStorage.getItem('malfred-gfx') === '2d' ? '2d' : '3d'; } catch {}
+let r3d = null, r3dFailed = false, r3dLoading = null;
+const use3d = () => gfx === '3d' && !!r3d;
+function loadR3d() {
+  if (!r3dLoading) {
+    r3dLoading = import('./render3d.js')
+      .then(async (m) => { if (!(await m.init(glCanvas))) throw new Error('WebGL unavailable'); r3d = m; })
+      .catch((e) => { console.warn('[malfred] 3D renderer unavailable, using 2D', e); r3dFailed = true; gfx = '2d'; })
+      .finally(applyGfx);
+  }
+  return r3dLoading;
+}
+function applyGfx() {
+  setProjection(use3d() ? '3d' : '2d');
+  r3d?.setActive(use3d() && !!ws);
+  resetFx(); r3d?.resetFx();
+  const b = $('btnGfx');
+  b.textContent = r3dFailed ? 'Graphics: 2D (3D unavailable)' : `Graphics: ${gfx === '3d' ? (r3d ? '3D' : '3D (loading…)') : '2D'}`;
+  b.disabled = r3dFailed;
+}
+$('btnGfx').onclick = () => {
+  gfx = gfx === '3d' ? '2d' : '3d';
+  try { localStorage.setItem('malfred-gfx', gfx); } catch {}
+  if (gfx === '3d' && !r3d) loadR3d();
+  applyGfx();
+};
+if (gfx === '3d') loadR3d(); else applyGfx();
 
 // ---------------- menu / connection ----------------
 $('name').value = localStorage.getItem('malfred-name') || '';
@@ -39,6 +73,7 @@ function connect(joinMsg) {
   sock.onclose = () => {
     if (ws === sock) {
       ws = null; $('hud').hidden = true; $('pause').hidden = true; $('menu').style.display = '';
+      r3d?.setActive(false);
       setSizzle(false);
       $('err').textContent = 'Disconnected from server.';
     } else if ($('err').textContent === 'Connecting…') $('err').textContent = 'Could not connect.';
@@ -55,7 +90,7 @@ function onMsg(m, sock) {
   if (m.t === 'err') { $('err').textContent = m.m; sock.close(); return; }
   if (m.t === 'joined') {
     ws = sock; myId = m.id; mode = m.mode; code = m.code;
-    snaps = []; cur = null; feed = []; pendingEv = []; resetFx(); $('feed').replaceChildren();
+    snaps = []; cur = null; feed = []; pendingEv = []; resetFx(); r3d?.resetFx(); r3d?.setActive(use3d()); $('feed').replaceChildren();
     $('menu').style.display = 'none'; $('hud').hidden = false; $('err').textContent = '';
     const link = `${location.origin}/?room=${code}`;
     if (mode === 'rounds') {
@@ -131,6 +166,7 @@ function leaveGame() {
   $('err').textContent = '';
   history.replaceState(null, '', location.pathname);
   snaps = []; cur = null; me = null;
+  r3d?.setActive(false);
 }
 
 // ---------------- lobby ----------------
@@ -367,7 +403,7 @@ function handleEvent(ev) {
   else if (type === 'lvl' && a === myId) sfx.level();
   else if (type === 'die') { sfx.die(c, d, a === myId); if (b === myId && a !== myId) sfx.kill(); }
   // visuals
-  fxEvent(ev, { P: cur?.P, myId, cam });
+  if (use3d()) r3d.fxEvent(ev, { P: cur?.P, myId, cam }); else fxEvent(ev, { P: cur?.P, myId, cam });
   if (type === 'die') addFeed(b ? roster.get(b) || { name: '?' } : null, roster.get(a) || { name: '?' });
 }
 
@@ -424,6 +460,13 @@ function frame(now) {
   updateCamera(dt, { me: mine, radius, round: b.rd, id: myId });
 
   setListener(cam.x, cam.y, cam.s, W);
+  if (use3d()) {
+    // 3D scene on the WebGL canvas; #c becomes a transparent overlay
+    ctx.clearRect(0, 0, W, H);
+    r3d.render({ a, b, f, players, radius, now, dt, roster, myId, moveMark }, ctx);
+    drawCameraHud(ctx, roster.get(myId)?.color);
+    return;
+  }
   const [shx, shy] = shakeOffset(dt);
   ctx.save();
   ctx.translate(shx, shy); // subtle screen shake, applied before the camera transform
