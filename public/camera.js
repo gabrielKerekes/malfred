@@ -13,7 +13,6 @@ const DOUBLE_TAP = 300;   // ms between Space presses that toggles the lock
 
 const cv = document.getElementById('c');
 const ptr = { x: 0, y: 0, inside: false };
-let focused = document.hasFocus();
 const keys = new Set();   // held arrow keys
 let spaceHeld = false, lastSpace = -1e9;
 let locked = false;       // camera lock: follow my wizard
@@ -111,8 +110,7 @@ addEventListener('pointerup', endTouch);
 addEventListener('pointercancel', endTouch);
 document.documentElement.addEventListener('pointerleave', () => { ptr.inside = false; });
 addEventListener('mouseout', (e) => { if (!e.relatedTarget) ptr.inside = false; });
-addEventListener('blur', () => { focused = false; ptr.inside = false; keys.clear(); spaceHeld = false; drag = null; });
-addEventListener('focus', () => { focused = true; });
+addEventListener('blur', () => { ptr.inside = false; keys.clear(); spaceHeld = false; drag = null; });
 
 function pinchState() {
   const [a, b] = [...touches.values()];
@@ -184,7 +182,7 @@ export function updateCamera(dt, view) {
   // edge + arrow-key panning, in screen px/s
   let dx = 0, dy = 0;
   if (paused()) keys.clear();
-  if (!follow && !paused() && ptr.inside && focused && document.hasFocus() && !drag && touches.size < 2) {
+  if (!follow && !paused() && ptr.inside && document.hasFocus() && !drag && touches.size < 2) {
     if (ptr.x < EDGE) dx--; else if (ptr.x > W - EDGE) dx++;
     if (ptr.y < EDGE) dy--; else if (ptr.y > H - EDGE) dy++;
   }
