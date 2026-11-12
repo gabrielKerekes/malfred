@@ -15,6 +15,8 @@ const MIME = {
 const BRAWL_MAX_HUMANS = 14;
 const BRAWL_MIN_FIGHTERS = 6;
 const ROOM_MAX = 10;
+// MALFRED_DEV=1: every human starts with all spells at max level (for testing)
+const DEV = process.env.MALFRED_DEV === '1';
 
 const server = http.createServer((req, res) => {
   let p;
@@ -43,7 +45,7 @@ function makeCode() {
 }
 
 function createRoom(mode) {
-  const room = { code: makeCode(), mode, game: new Game(mode), conns: new Map(), host: 0, bots: mode === 'rounds' ? 3 : 0 };
+  const room = { code: makeCode(), mode, game: new Game(mode, { allSpells: DEV }), conns: new Map(), host: 0, bots: mode === 'rounds' ? 3 : 0 };
   rooms.set(room.code, room);
   syncBots(room);
   return room;
@@ -167,4 +169,4 @@ setInterval(() => {
   }
 }, 30000);
 
-server.listen(PORT, () => console.log(`Malfred listening on http://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`Malfred listening on http://localhost:${PORT}${DEV ? ' (DEV: all spells unlocked)' : ''}`));

@@ -60,8 +60,9 @@ const rnd = Math.random;
 const hyp = Math.hypot;
 
 export class Game {
-  constructor(mode) {
+  constructor(mode, opts = {}) {
     this.mode = mode; // 'brawl' | 'rounds'
+    this.allSpells = !!opts.allSpells; // dev/testing: humans start with every spell maxed
     this.tick = 0;
     this.players = new Map();
     this.projs = [];
@@ -110,6 +111,10 @@ export class Game {
     for (const k of SPELL_KEYS) { p.lv[k] = SPELLS[k].start; p.cd[k] = 0; }
     p.pts = this.mode === 'brawl' ? 2 : 3;
     p.level = 1; p.xp = 0; p.maxHp = BASE_HP;
+    if (this.allSpells && !p.bot) {
+      for (const k of SPELL_KEYS) p.lv[k] = SPELLS[k].max;
+      p.maxHp += 15 * SPELLS.vigor.max;
+    }
   }
 
   spawn(p, x, y) {
