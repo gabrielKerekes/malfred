@@ -1,5 +1,7 @@
-// Procedural sound effects (Web Audio, no asset files). Positional: volume falls
-// off with distance from the listener (camera centre) and pans left/right.
+// Sound effects: recorded CC0 samples (public/sfx, see public/sfx/CREDITS.txt) for
+// impacts, procedural Web Audio synthesis for casts and UI, and as the fallback
+// while samples load. Positional: volume falls off with distance from the
+// listener (camera centre) and pans left/right.
 
 let ac = null, master = null, noiseBuf = null, crackleBuf = null, sizzle = null;
 let muted = false;
@@ -20,6 +22,7 @@ function init() {
   noiseBuf = ac.createBuffer(1, ac.sampleRate * 1.5, ac.sampleRate);
   const d = noiseBuf.getChannelData(0);
   for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  loadSamples();
   // fire crackle: sparse random pops, each a tiny decaying noise burst
   crackleBuf = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
   const c = crackleBuf.getChannelData(0);
@@ -125,6 +128,30 @@ function bell(dest, { f, dur = 0.8, vol = 0.2, delay = 0 }) {
 
 const jit = (v, r = 0.08) => v * (1 + (Math.random() - 0.5) * 2 * r);
 
+// ---------------- recorded samples ----------------
+const SAMPLE_NAMES = ['fire_hit1', 'fire_hit2', 'fire_hit3', 'meteor', 'meteor_low', 'lava_death',
+  'shock', 'ward', 'reflect', 'wisp_hit', 'blink', 'levelup'];
+const samples = {};
+function loadSamples() {
+  for (const n of SAMPLE_NAMES) {
+    fetch(`sfx/${n}.m4a`).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject()))
+      .then((b) => ac.decodeAudioData(b)).then((buf) => { samples[n] = buf; }).catch(() => {});
+  }
+}
+// play a sample (random pick from a list) into dest; false if not loaded yet
+function play(names, dest, { vol = 1, rate = 1, vary = 0.06, delay = 0 } = {}) {
+  const list = Array.isArray(names) ? names : [names];
+  const buf = samples[list[Math.floor(Math.random() * list.length)]];
+  if (!buf) return false;
+  const s = ac.createBufferSource(); s.buffer = buf;
+  s.playbackRate.value = rate * (1 + (Math.random() - 0.5) * 2 * vary);
+  const g = ac.createGain(); g.gain.value = vol;
+  s.connect(g).connect(dest);
+  s.start(ac.currentTime + delay);
+  return true;
+}
+const FIRE_HITS = ['fire_hit1', 'fire_hit2', 'fire_hit3'];
+
 // ---------------- the sounds ----------------
 export const sfx = {
   // Cinder Bolt: a fireball whooshing out of the staff
@@ -141,6 +168,10 @@ export const sfx = {
     bell(o, { f: jit(1760, 0.03), dur: 0.5, vol: 0.06, delay: 0.1 }); },
   // impacts: fireball bursts into flame; wisp pops with a chime
   hit(x, y, seeker) { const o = out(x, y, 0.85); if (!o) return;
+    if (play(seeker ? 'wisp_hit' : FIRE_HITS, o, { vol: seeker ? 0.8 : 0.9 })) {
+      if (!seeker) tone(o, { type: 'sine', f0: jit(120), f1: 45, dur: 0.2, vol: 0.4 }); // body thump
+      return;
+    }
     if (seeker) {
       tone(o, { type: 'sine', f0: jit(900), f1: 200, dur: 0.15, vol: 0.4 });
       bell(o, { f: jit(1200, 0.03), dur: 0.5, vol: 0.12 });
@@ -152,11 +183,13 @@ export const sfx = {
     } },
   // Mirror Ward reflect: crystal ping
   reflect(x, y) { const o = out(x, y, 0.65); if (!o) return;
+    if (play('reflect', o, { vol: 0.8, vary: 0.1 })) return;
     bell(o, { f: jit(1900, 0.04), dur: 0.7, vol: 0.3 });
     noise(o, { dur: 0.06, vol: 0.3, type: 'highpass', f0: 5000 }); },
   // Shockwave: a deep thump and a rush of air outward
   shock(x, y) { const o = out(x, y, 0.95); if (!o) return;
     tone(o, { type: 'sine', f0: 95, f1: 32, dur: 0.45, vol: 0.9, attack: 0.003 });
+    if (play('shock', o, { vol: 0.9, rate: 1.15 })) return;
     noise(o, { dur: 0.55, vol: 0.75, type: 'bandpass', f0: 2600, f1: 220, q: 0.5, attack: 0.005 });
     noise(o, { dur: 0.12, vol: 0.4, f0: 6000, f1: 800 }); },
   // Meteor cast: a rising roar and whistle as it falls; lands with boom()
@@ -166,6 +199,7 @@ export const sfx = {
     crackle(o, { dur: delay * 0.2, vol: 0.4, f: 1500, attack: delay * 0.8 }); },
   // Meteor impact: explosion, debris and a lingering rumble
   boom(x, y) { const o = out(x, y, 1); if (!o) return;
+    if (play('meteor', o, { vol: 1 })) { play('meteor_low', o, { vol: 1, vary: 0.04 }); return; }
     tone(o, { type: 'sine', f0: 90, f1: 24, dur: 0.9, vol: 1, attack: 0.002 });
     noise(o, { dur: 1.1, vol: 1, f0: 2800, f1: 90, attack: 0.002 });
     noise(o, { dur: 0.07, vol: 0.6, type: 'highpass', f0: 2500 });
@@ -173,15 +207,18 @@ export const sfx = {
     noise(o, { dur: 1.4, vol: 0.4, f0: 160, f1: 60, attack: 0.15, delay: 0.1 }); },
   // Blink: a sucking warp out and a pop in
   blink(x, y) { const o = out(x, y, 0.6); if (!o) return;
+    if (play('blink', o, { vol: 0.8, rate: 1.2 })) return;
     warble(o, { type: 'triangle', f0: jit(250), f1: 1600, dur: 0.18, vol: 0.25, rate: 30, depth: 0.15, attack: 0.12 });
     noise(o, { dur: 0.05, vol: 0.4, type: 'bandpass', f0: 1800, q: 2, attack: 0.13 });
     tone(o, { type: 'sine', f0: 1500, f1: 500, dur: 0.12, vol: 0.2, delay: 0.14 }); },
   // Mirror Ward: shimmering crystal shield forming
   ward() { const o = out(undefined, undefined, 0.5); if (!o) return;
+    if (play('ward', o, { vol: 0.8 })) return;
     [1320, 1660, 1980].forEach((f, i) => bell(o, { f, dur: 0.9, vol: 0.12, delay: i * 0.05 }));
     noise(o, { dur: 0.5, vol: 0.2, type: 'highpass', f0: 6000, attack: 0.08 }); },
   // knocked out: plunge into lava, a hiss of steam and flames
   die(x, y, mine) { const o = out(mine ? undefined : x, y, mine ? 1 : 0.8); if (!o) return;
+    if (play('lava_death', o, { vol: 1 })) { noise(o, { dur: 0.9, vol: 0.35, type: 'highpass', f0: 3000, attack: 0.05 }); return; }
     tone(o, { type: 'sine', f0: 140, f1: 40, dur: 0.4, vol: 0.6 });
     noise(o, { dur: 0.9, vol: 0.6, type: 'highpass', f0: 3000, attack: 0.05 });
     noise(o, { dur: 1.0, vol: 0.6, f0: 1200, f1: 200, attack: 0.03 });
@@ -190,6 +227,7 @@ export const sfx = {
   kill() { const o = out(undefined, undefined, 0.6); if (!o) return;
     [660, 880, 1320].forEach((f, i) => tone(o, { type: 'triangle', f0: f, dur: 0.18, vol: 0.22, delay: i * 0.06 })); },
   level() { const o = out(undefined, undefined, 0.6); if (!o) return;
+    if (play('levelup', o, { vol: 0.7, vary: 0 })) return;
     [523, 659, 784, 1047].forEach((f, i) => bell(o, { f, dur: 0.7, vol: 0.18, delay: i * 0.08 })); },
   upgrade() { const o = out(undefined, undefined, 0.5); if (!o) return;
     bell(o, { f: 1568, dur: 0.35, vol: 0.15 }); },

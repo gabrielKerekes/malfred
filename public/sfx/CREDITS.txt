@@ -1,0 +1,16 @@
+Sound effects in this folder are trimmed, normalized, mono AAC conversions of
+files from "150 Combat Sound Effects" compiled by untamedpixels
+(https://opengameart.org/node/195932), all licensed CC0 1.0 Universal
+(https://creativecommons.org/publicdomain/zero/1.0/). Attribution is not
+required; listed here for traceability.
+
+fire_hit1-3.m4a  Fire Spell Impact 3/4/5     lentikula - Basic Spell Impacts
+meteor.m4a       Fire Spell Impact 1         lentikula - Basic Spell Impacts
+lava_death.m4a   Fire Spell Impact 2         lentikula - Basic Spell Impacts
+ward.m4a         Ice Spell Impact 4          lentikula - Basic Spell Impacts
+reflect.m4a      Ice Spell Impact 5          lentikula - Basic Spell Impacts
+shock.m4a        Wind Spell Impact 1         lentikula - Druid Spell Impacts
+wisp_hit.m4a     Healing Spell Impact 9      lentikula - Healing Spell Impacts
+blink.m4a        Healing Spell Impact 10     lentikula - Healing Spell Impacts
+levelup.m4a      Healing Spell Impact 4      lentikula - Healing Spell Impacts
+meteor_low.m4a   low_frequency_explosion_001 Kenney - Sci-fi Sounds
