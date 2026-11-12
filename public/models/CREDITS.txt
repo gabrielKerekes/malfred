@@ -1,0 +1,16 @@
+3D models used by the 3D renderer (public/render3d.js)
+
+mage.glb
+  Source:  "KayKit - Character Pack: Adventurers" (1.0), Mage character, with its built-in animations
+  Author:  Kay Lousberg (https://kaylousberg.com)
+  Store:   https://kaylousberg.itch.io/kaykit-adventurers   (asset license: Creative Commons Zero v1.0 Universal)
+  File:    https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Adventures-1.0
+           addons/kaykit_character_pack_adventures/Characters/gltf/Mage.glb (commit 672074b)
+  License: CC0 1.0 Universal - http://creativecommons.org/publicdomain/zero/1.0/
+           (the pack's LICENSE.txt: "Licensed under CC0 1.0 Universal"; attribution not required, given anyway)
+
+  Changes: trimmed with glTF-Transform to the clips the game uses (Idle, Running_A, Spellcast_Shoot,
+  Hit_A, Death_A, Death_B, Dodge_Backward, Jump_Idle, Cheer), removed the spellbook and wand props,
+  resampled the animation keys and pruned unused data (3.6 MB -> 0.58 MB). The player colour is applied
+  at runtime by recolouring the robe/hat swatches of the embedded gradient atlas; the hat brim is drawn
+  narrower so the body stays visible from the overhead camera.
