@@ -240,7 +240,7 @@ class Particles {
       const q = life[i] / max[i];
       if (k === K_FLAME) { // white-yellow -> orange -> deep red, HDR so the hot core blooms
         const h = q;
-        col[i4] = 0.9 + 4.5 * h; col[i4 + 1] = 0.12 + 2.6 * h * h; col[i4 + 2] = 0.02 + 1.2 * h * h * h;
+        col[i4] = 0.85 + 2.3 * h; col[i4 + 1] = 0.12 + 1.4 * h * h; col[i4 + 2] = 0.02 + 0.5 * h * h * h;
         col[i4 + 3] = q > 0.25 ? 0.9 : q * 3.6;
         size[i] = s0[i] * (0.45 + 0.55 * q);
       } else if (k === K_SMOKE) {
@@ -977,9 +977,9 @@ function updateProjectiles(a, b, f, now, myId) {
     const y = CHEST;
     if (seeker) {
       const pul = Math.sin(now / 80 + jb[0]);
-      glows.add(x, y, z, 62 + 6 * pul, 1.2, 0.35, 2.6, 0.9);
-      glows.add(x, y, z, 26, 2.6, 1.0, 2.4, 1);
-      glows.add(x, y, z, 10, 4, 4, 4, 1);
+      glows.add(x, y, z, 44 + 5 * pul, 0.75, 0.22, 1.6, 0.6);
+      glows.add(x, y, z, 22, 1.6, 0.65, 1.6, 0.9);
+      glows.add(x, y, z, 9, 2.2, 2, 2.6, 1);
       for (let k = 0; k < 3; k++) {
         const an = now * 0.009 + (k * TAU) / 3;
         glows.add(x + Math.cos(an) * 15, y + Math.sin(an * 1.3) * 8, z + Math.sin(an) * 15, 7, 2.5, 2, 3.5, 1);
@@ -991,9 +991,9 @@ function updateProjectiles(a, b, f, now, myId) {
       }
       candidate(x, y, z, 0.6, 0.3, 1, 1);
     } else {
-      glows.add(x, y, z, 58, 2.6, 0.6, 0.1, 0.8);
-      glows.add(x, y, z, 26, 4, 2.2, 0.7, 1);
-      glows.add(x, y, z, 10 + Math.sin(now / 30 + x) * 1, 6, 6, 5, 1);
+      glows.add(x, y, z, 40, 1.4, 0.35, 0.06, 0.55);
+      glows.add(x, y, z, 20, 2.2, 1.1, 0.3, 0.9);
+      glows.add(x, y, z, 8 + Math.sin(now / 30 + x) * 1, 2.6, 2.1, 1.3, 1);
       // flame trail
       for (let k = 0; k < 3; k++) {
         const q = k / 3;
@@ -1075,7 +1075,7 @@ export function fxEvent(ev, env) {
     fx.burst(a, CHEST, b, 16, 280, 0.35, 4, K_SPARK, seek ? 2.4 : 4, seek ? 1.4 : 1.9, seek ? 4 : 0.4, 0.9, 0.6, 400);
     if (seek) fx.burst(a, CHEST, b, 10, 90, 0.45, 22, K_GLOW, 1.4, 0.5, 2.6, 0.9);
     else for (let i = 0; i < 10; i++) fx.spawn(a + rand(-6, 6), CHEST + rand(-6, 6), b + rand(-6, 6), rand(-70, 70), rand(-10, 80), rand(-70, 70), rand(0.3, 0.5), rand(18, 28), K_FLAME, 0, 0, 0, 0.94);
-    glows.add(a, CHEST, b, 70, 3, 1.5, 0.5, 1);
+    glows.add(a, CHEST, b, 46, 1.7, 0.8, 0.25, 0.8);
     lightFlash(a, CHEST, b, seek ? 0.7 : 1, seek ? 0.4 : 0.5, seek ? 1 : 0.15, 3, 0.2);
     if (mine && Math.hypot(a - mine[1], b - mine[2]) < 60) addShake(0.3); else addShake(0.1 * near(a, b, 450));
   } else if (type === 'refl') {
@@ -1478,7 +1478,7 @@ export async function init(canvasEl) {
   composer.setPixelRatio(pixelRatio);
   setMSAA();
   renderPass = new RenderPass(scene, camera);
-  bloom = new UnrealBloomPass(new THREE.Vector2(W, H), 0.42, 0.4, 1.0);
+  bloom = new UnrealBloomPass(new THREE.Vector2(W, H), 0.3, 0.35, 1.0);
   // bloom is a soft blur anyway: run its mip chain at half the drawing-buffer size
   const bloomSize = bloom.setSize.bind(bloom);
   bloom.setSize = (w, h) => bloomSize(Math.max(1, w >> 1), Math.max(1, h >> 1));
