@@ -6,13 +6,14 @@ import { PLAYER_R } from '/shared/game.js';
 
 export const cam = { x: 0, y: 0, s: 1 };
 
-const EDGE = 24;          // px from a window edge that triggers edge panning
+const EDGE = 70;          // px from a window edge where edge panning starts (speed ramps up toward the edge)
+const EDGE_UI = 8;        // over HUD elements (spell bar, buttons) only the outermost px pan
 const PAN = 1100;         // pan speed in screen px/s (same feel at every zoom)
 const CLAMP_PAD = 300;    // camera centre must stay within arena radius + this
 const DOUBLE_TAP = 300;   // ms between Space presses that toggles the lock
 
 const cv = document.getElementById('c');
-const ptr = { x: 0, y: 0, inside: false };
+const ptr = { x: 0, y: 0, inside: false, overUi: false };
 const keys = new Set();   // held arrow keys
 let spaceHeld = false, lastSpace = -1e9;
 let locked = false;       // camera lock: follow my wizard
@@ -94,7 +95,7 @@ addEventListener('pointermove', (e) => {
     }
     return;
   }
-  ptr.x = x; ptr.y = y; ptr.inside = true;
+  ptr.x = x; ptr.y = y; ptr.inside = true; ptr.overUi = e.target !== cv;
   // middle button may be pressed while another button is already held (chorded press)
   if (e.buttons & 4) {
     if (drag && active()) { panScreen(drag.x - x, drag.y - y); locked = false; anchor = null; }
@@ -183,15 +184,18 @@ export function updateCamera(dt, view) {
   let dx = 0, dy = 0;
   if (paused()) keys.clear();
   if (!follow && !paused() && ptr.inside && document.hasFocus() && !drag && touches.size < 2) {
-    if (ptr.x < EDGE) dx--; else if (ptr.x > W - EDGE) dx++;
-    if (ptr.y < EDGE) dy--; else if (ptr.y > H - EDGE) dy++;
+    // 0 at the inner border of the zone -> 1 at the window edge; starts at 35% speed
+    const zone = ptr.overUi ? EDGE_UI : EDGE;
+    const pull = (d) => (d < zone ? 0.35 + 0.65 * (1 - Math.max(0, d) / zone) : 0);
+    dx = pull(W - 1 - ptr.x) - pull(ptr.x);
+    dy = pull(H - 1 - ptr.y) - pull(ptr.y);
   }
-  if (keys.has('ArrowLeft')) dx--;
-  if (keys.has('ArrowRight')) dx++;
-  if (keys.has('ArrowUp')) dy--;
-  if (keys.has('ArrowDown')) dy++;
+  if (keys.has('ArrowLeft')) dx = -1;
+  if (keys.has('ArrowRight')) dx = 1;
+  if (keys.has('ArrowUp')) dy = -1;
+  if (keys.has('ArrowDown')) dy = 1;
   if (dx || dy) {
-    const l = Math.hypot(dx, dy);
+    const l = Math.max(1, Math.hypot(dx, dy)); // keep partial speeds, cap diagonals at full speed
     panScreen(dx / l * PAN * dt, dy / l * PAN * dt);
     anchor = null;
   }
