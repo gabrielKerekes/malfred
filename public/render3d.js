@@ -1078,6 +1078,10 @@ export function fxEvent(ev, env) {
     glows.add(a, CHEST, b, 46, 1.7, 0.8, 0.25, 0.8);
     lightFlash(a, CHEST, b, seek ? 0.7 : 1, seek ? 0.4 : 0.5, seek ? 1 : 0.15, 3, 0.2);
     if (mine && Math.hypot(a - mine[1], b - mine[2]) < 60) addShake(0.3); else addShake(0.1 * near(a, b, 450));
+  } else if (type === 'bump') { // wizards colliding; c = 1..9 impact strength
+    fx.burst(a, CHEST, b, 8 + c * 2, 140 + c * 25, 0.28, 4, K_SPARK, 2.6, 2.2, 1.6, 0.88);
+    ring(a, b, 8, 22 + c * 3, 0.22, 1.6, 1.4, 1.1, 0.25);
+    addShake((mine && Math.hypot(a - mine[1], b - mine[2]) < 40 ? 0.25 : 0.12 * near(a, b, 450)) * Math.min(1, c / 4));
   } else if (type === 'refl') {
     fx.burst(a, CHEST, b, 14, 240, 0.3, 4, K_SPARK, 1.6, 3.2, 4, 0.9);
     ring(a, b, 10, 40, 0.3, 1.2, 2.8, 3.6, 0.25);

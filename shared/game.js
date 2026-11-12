@@ -315,7 +315,21 @@ export class Game {
           p.face = Math.atan2(dy, dx);
         }
       }
-      p.x += p.vx * DT; p.y += p.vy * DT;
+    }
+
+    // knockback motion + body collisions. Sub-stepped so a fast-flying wizard
+    // can't tunnel through someone in a single tick.
+    const al = this.alive();
+    let vmax = 0;
+    if (moving) for (const p of al) vmax = Math.max(vmax, hyp(p.vx, p.vy));
+    const sub = Math.min(8, Math.max(1, Math.ceil(vmax * DT / (PLAYER_R * 0.75))));
+    for (let s = 0; s < sub; s++) {
+      if (moving) for (const p of al) { p.x += p.vx * DT / sub; p.y += p.vy * DT / sub; }
+      this.collideBodies(al);
+    }
+
+    for (const p of al) {
+      if (!moving) continue;
       p.vx *= fr; p.vy *= fr;
       p.lava = hyp(p.x, p.y) > R;
       if (p.lava && playing) {
@@ -327,19 +341,6 @@ export class Game {
         p.xp += DT;
         const need = 10 + 6 * p.level;
         if (p.xp >= need) { p.xp -= need; p.level++; p.pts++; p.maxHp += 4; p.hp += 4; this.dirty = true; this.ev('lvl', p.id); }
-      }
-    }
-
-    // bodies push each other apart
-    const al = this.alive();
-    for (let i = 0; i < al.length; i++) {
-      for (let j = i + 1; j < al.length; j++) {
-        const a = al[i], b = al[j];
-        const dx = b.x - a.x, dy = b.y - a.y, d = hyp(dx, dy);
-        if (d < PLAYER_R * 2 && d > 0.01) {
-          const o = (PLAYER_R * 2 - d) / 2;
-          a.x -= dx / d * o; a.y -= dy / d * o; b.x += dx / d * o; b.y += dy / d * o;
-        }
       }
     }
 
@@ -400,6 +401,33 @@ export class Game {
       this.ev('boom', Math.round(z.x), Math.round(z.y), z.r);
     }
     this.zones = this.zones.filter((z) => z.t > 0);
+  }
+
+  // Bodies push each other apart, and knockback momentum carries over: a wizard
+  // sent flying slams into whoever is in the way, who is shoved along (and the
+  // caster gets the credit if that sends them into the lava).
+  collideBodies(al) {
+    const D = PLAYER_R * 2, REST = 0.6;
+    for (let i = 0; i < al.length; i++) {
+      for (let j = i + 1; j < al.length; j++) {
+        const a = al[i], b = al[j];
+        const dx = b.x - a.x, dy = b.y - a.y, d = hyp(dx, dy);
+        if (d >= D || d <= 0.01) continue;
+        const nx = dx / d, ny = dy / d, o = (D - d) / 2;
+        a.x -= nx * o; a.y -= ny * o; b.x += nx * o; b.y += ny * o;
+        const vn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny; // < 0: closing in
+        if (vn >= -40) continue; // walking into someone is just a nudge
+        // whoever was flying in passes the blame on to the one they hit
+        const aIn = a.vx * nx + a.vy * ny, bIn = -(b.vx * nx + b.vy * ny);
+        const [mover, other] = aIn >= bIn ? [a, b] : [b, a];
+        const imp = -(1 + REST) * vn / 2;
+        a.vx -= nx * imp; a.vy -= ny * imp; b.vx += nx * imp; b.vy += ny * imp;
+        if (mover.lastHitBy && mover.lastHitBy !== other.id && this.tick - mover.lastHitTick < 2 * TICK) {
+          other.lastHitBy = mover.lastHitBy; other.lastHitTick = this.tick;
+        }
+        if (-vn > 250) this.ev('bump', Math.round(a.x + nx * PLAYER_R), Math.round(a.y + ny * PLAYER_R), Math.min(9, Math.round(-vn / 150)));
+      }
+    }
   }
 
   // Projectiles from different casters that touch cancel each other out. Swept test:

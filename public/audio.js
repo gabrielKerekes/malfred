@@ -182,6 +182,10 @@ export const sfx = {
       crackle(o, { dur: 0.6, vol: 0.7, f: 1200, attack: 0.02 });
     } },
   // Mirror Ward reflect: crystal ping
+  // two wizards slamming into each other: a heavy body thud, louder the harder they hit
+  bump(x, y, f) { const o = out(x, y, 0.4 + 0.06 * f); if (!o) return;
+    tone(o, { type: 'sine', f0: jit(140), f1: 50, dur: 0.18, vol: 0.5 });
+    noise(o, { dur: 0.12, vol: 0.35, type: 'lowpass', f0: 1400, f1: 300, attack: 0.002 }); },
   reflect(x, y) { const o = out(x, y, 0.65); if (!o) return;
     if (play('reflect', o, { vol: 0.8, vary: 0.1 })) return;
     bell(o, { f: jit(1900, 0.04), dur: 0.7, vol: 0.3 });

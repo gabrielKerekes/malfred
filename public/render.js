@@ -612,6 +612,11 @@ export function fxEvent(ev, env) {
     else for (let i = 0; i < 8; i++) flame(a + rand(-6, 6), b + rand(-6, 6), rand(-60, 60), rand(-90, 10), rand(0.3, 0.5), rand(8, 13));
     rings.push({ kind: 'flash', x: a, y: b, r: 30, t: 0, max: 0.2, color: col });
     if (mine && Math.hypot(a - mine[1], b - mine[2]) < 60) addShake(0.3); else addShake(0.1 * near(a, b, 450));
+  } else if (type === 'bump') { // wizards colliding; c = 1..9 impact strength
+    emit(a, b, 6 + c * 2, '#fff1c8', 120 + c * 25, 0.25, 2, K_SPARK, 0.88);
+    emit(a, b, 4, '', 60, 0.6, 10, K_SMOKE, 0.9);
+    rings.push({ kind: 'ring', x: a, y: b, r: 20 + c * 3, t: 0, max: 0.2, color: '#fff1c8' });
+    addShake((mine && Math.hypot(a - mine[1], b - mine[2]) < 40 ? 0.25 : 0.12 * near(a, b, 450)) * Math.min(1, c / 4));
   } else if (type === 'refl') {
     emit(a, b, 12, '#aeefff', 220, 0.3, 2, K_SPARK, 0.9);
     rings.push({ kind: 'ring', x: a, y: b, r: 34, t: 0, max: 0.25, color: '#aeefff' });

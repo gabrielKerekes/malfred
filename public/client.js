@@ -405,6 +405,7 @@ function handleEvent(ev) {
   }
   if (type === 'hit') sfx.hit(a, b, c);
   else if (type === 'refl') sfx.reflect(a, b);
+  else if (type === 'bump') sfx.bump(a, b, c);
   else if (type === 'shock') sfx.shock(a, b);
   else if (type === 'boom') sfx.boom(a, b);
   else if (type === 'blink') sfx.blink(c, d);
