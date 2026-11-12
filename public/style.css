@@ -63,4 +63,4 @@ input { background: #150c0a; border: 1px solid #6b4a3a; border-radius: 6px; padd
 .slot .up { position: absolute; top: 0; right: 0; padding: 0 6px; font-weight: 700; border-radius: 0 0 0 8px;
   background: #ca8a04; border: 0; color: #fff; line-height: 18px; }
 .slot .up:hover { background: #eab308 !important; }
-@media (max-width: 640px) { .slot { width: 44px; height: 50px; } .slot .ico { font-size: 18px; line-height: 34px; } #board { font-size: 11px; min-width: 0; } }
+@media (max-width: 640px) { #bar { gap: 4px; } .slot { width: 40px; height: 50px; } .slot .ico { font-size: 18px; line-height: 34px; } #board { font-size: 11px; min-width: 0; } }

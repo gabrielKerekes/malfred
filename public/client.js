@@ -75,6 +75,7 @@ function onMsg(m, sock) {
     snaps.push({ time: now, s });
     if (snaps.length > 30) snaps.shift();
     for (const ev of s.ev) pendingEv.push({ time: now, ev });
+    if (pendingEv.length > 400) pendingEv.splice(0, pendingEv.length - 400); // rAF is paused in hidden tabs
     const phaseChanged = !cur || cur.ph !== s.ph;
     cur = s; me = m.me;
     updateBar();
@@ -220,7 +221,8 @@ function castAtNearest(k) {
 cv.addEventListener('contextmenu', (e) => e.preventDefault());
 cv.addEventListener('pointerdown', (e) => {
   mouse.x = e.clientX; mouse.y = e.clientY;
-  if (e.pointerType === 'touch' || e.button === 2) { mouse.down = true; sendMove(); }
+  // Ctrl+click is the macOS one-button right-click, so treat it as move too
+  if (e.pointerType === 'touch' || e.button === 2 || (e.button === 0 && e.ctrlKey)) { mouse.down = true; sendMove(); }
   else if (e.button === 0) castAt('bolt');
 });
 cv.addEventListener('pointermove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; });
@@ -304,7 +306,11 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   if (!ws || !snaps.length) { drawBackdrop(now); return; }
 
-  while (pendingEv.length && pendingEv[0].time <= now - INTERP) handleEvent(pendingEv.shift().ev);
+  // events queued while the tab was hidden are stale: drop them instead of replaying a burst
+  while (pendingEv.length && pendingEv[0].time <= now - INTERP) {
+    const e = pendingEv.shift();
+    if (now - e.time < 1000) handleEvent(e.ev);
+  }
   if (mouse.down && now - mouse.lastSend > 90) sendMove();
 
   const { a, b, f } = sample(now);

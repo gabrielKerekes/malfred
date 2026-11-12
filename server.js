@@ -17,11 +17,14 @@ const BRAWL_MIN_FIGHTERS = 6;
 const ROOM_MAX = 10;
 
 const server = http.createServer((req, res) => {
-  let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  let p;
+  try { p = decodeURIComponent(new URL(req.url, 'http://x').pathname); } catch { res.writeHead(400); res.end('bad request'); return; }
   if (p === '/healthz') { res.writeHead(200); res.end('ok'); return; }
   if (p === '/') p = '/index.html';
-  const base = p.startsWith('/shared/') ? ROOT : path.join(ROOT, 'public');
-  const file = path.normalize(path.join(base, p));
+  // /shared/* is served from ./shared, everything else from ./public; never above either
+  const shared = p.startsWith('/shared/');
+  const base = path.join(ROOT, shared ? 'shared' : 'public');
+  const file = path.normalize(path.join(base, shared ? p.slice('/shared'.length) : p));
   if (!file.startsWith(base + path.sep) || !MIME[path.extname(file)]) { res.writeHead(404); res.end('not found'); return; }
   fs.readFile(file, (err, data) => {
     if (err) { res.writeHead(404); res.end('not found'); return; }
@@ -146,7 +149,8 @@ setInterval(() => {
   n++;
   for (const room of rooms.values()) {
     const g = room.game;
-    g.step();
+    // a bug in one room must not take down every other room with it
+    try { g.step(); } catch (e) { console.error(`room ${room.code} step failed:`, e); continue; }
     if (n % 2) continue;
     const snap = JSON.stringify(g.snapshot());
     for (const [ws, pid] of room.conns) {
