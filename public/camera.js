@@ -1,10 +1,22 @@
 // Warcraft III-style free camera: edge panning, arrow keys, middle-drag, wheel zoom
 // toward the cursor, Space to centre on your wizard, Y / double-Space to lock-follow.
-// Interface used by client.js: `cam` {x, y, s}, `toWorld`, `updateCamera(dt, view)`,
-// `drawCameraHud(ctx, color)` and `touchGesture()`.
+// Interface used by client.js: `cam` {x, y, s}, `toWorld`, `toScreen`, `updateCamera(dt, view)`,
+// `drawCameraHud(ctx, color)`, `touchGesture()` and `setProjection('2d' | '3d')`.
+//
+// cam.x/cam.y is the ground point the camera looks at and cam.s is the zoom in
+// screen px per world unit at that point. In 2D that is a plain top-down scale.
+// In 3D it's a tilted perspective camera (PITCH, FOV) standing back from the look
+// point at the distance where one world unit at the look point spans cam.s px,
+// so every zoom/pan rule below means the same thing in both modes. World (x, y)
+// is the 3D ground plane (x, 0, y); the camera stands south (+y) of the look point.
 import { PLAYER_R } from '/shared/game.js';
 
 export const cam = { x: 0, y: 0, s: 1 };
+export const PITCH = 52 * Math.PI / 180; // camera tilt below the horizon
+export const FOV = 40;                    // vertical field of view, degrees
+const SP = Math.sin(PITCH), CP = Math.cos(PITCH), TF = Math.tan(FOV * Math.PI / 360);
+let mode3d = false;
+export function setProjection(m) { mode3d = m === '3d'; }
 
 const EDGE = 70;          // px from a window edge where edge panning starts (speed ramps up toward the edge)
 const EDGE_UI = 8;        // over HUD elements (spell bar, buttons) only the outermost px pan
@@ -28,7 +40,39 @@ let lastUpdate = -1e9, lastId = -1, lastRound = -1, wasAlive = false;
 let radius = 500, me = null;
 let arrowHit = null, pillHit = null;
 
-export const toWorld = (mx, my) => ({ x: (mx - innerWidth / 2) / cam.s + cam.x, y: (my - innerHeight / 2) / cam.s + cam.y });
+/** 3D camera placement for the current cam: eye position (3D coords, y up) and look distance. */
+const pose = { x: 0, y: 0, z: 0, d: 1 };
+export function camPose() {
+  const d = innerHeight / (2 * TF * cam.s);
+  pose.d = d; pose.x = cam.x; pose.y = d * SP; pose.z = cam.y + d * CP;
+  return pose;
+}
+
+/** Screen point -> world ground point. In 3D: the mouse ray meets the ground plane exactly. */
+export function toWorld(mx, my) {
+  if (!mode3d) return { x: (mx - innerWidth / 2) / cam.s + cam.x, y: (my - innerHeight / 2) / cam.s + cam.y };
+  const W = innerWidth, H = innerHeight, p = camPose();
+  const nx = (mx / W) * 2 - 1, ny = 1 - (my / H) * 2;
+  // ray = forward (0,-sin,-cos) + right (1,0,0)*nx*tan*aspect + up (0,cos,-sin)*ny*tan
+  const dx = nx * TF * (W / H), dz = -CP - ny * TF * SP;
+  const dy = Math.min(-0.05, -SP + ny * TF * CP); // never parallel to the ground
+  const k = p.y / -dy;
+  return { x: p.x + dx * k, y: p.z + dz * k };
+}
+
+/** World point (x, y) at height h -> screen px, written into out {x, y}. Returns false if behind the camera. */
+export function toScreen(x, y, h, out) {
+  const W = innerWidth, H = innerHeight;
+  if (!mode3d) { out.x = (x - cam.x) * cam.s + W / 2; out.y = (y - cam.y) * cam.s + H / 2; return true; }
+  const p = camPose();
+  const vx = x - p.x, vy = h - p.y, vz = y - p.z;
+  let zc = -SP * vy - CP * vz; // depth along the view direction
+  const ok = zc > 1;
+  if (!ok) zc = 1;
+  out.x = (vx / (zc * TF * (W / H)) + 1) / 2 * W;
+  out.y = (1 - (CP * vy - SP * vz) / (zc * TF)) / 2 * H;
+  return ok;
+}
 export const touchGesture = () => touches.size > 1;
 
 const active = () => performance.now() - lastUpdate < 300;
@@ -40,15 +84,28 @@ function zoomLimits() {
 }
 const following = () => !!(me && me.alive && (locked || spaceHeld));
 
+// move the view by a screen-space amount (measured at the screen centre in 3D)
 function panScreen(dx, dy) {
+  if (mode3d) {
+    const cx = innerWidth / 2, cy = innerHeight / 2;
+    panGrab(cx + dx, cy + dy, cx, cy);
+    return;
+  }
   cam.x += dx / cam.s; cam.y += dy / cam.s;
+  autoView = false;
+}
+// "grab" panning: the ground point under screen (x0, y0) ends up under (x1, y1)
+function panGrab(x0, y0, x1, y1) {
+  const a = toWorld(x0, y0), b = toWorld(x1, y1);
+  cam.x += a.x - b.x; cam.y += a.y - b.y;
   autoView = false;
 }
 // zoom so the world point under (sx, sy) stays put
 function zoomAt(s, sx, sy) {
   const w = toWorld(sx, sy);
   cam.s = s;
-  cam.x = w.x - (sx - innerWidth / 2) / s; cam.y = w.y - (sy - innerHeight / 2) / s;
+  const v = toWorld(sx, sy); // moving the look point shifts the ground mapping 1:1
+  cam.x += w.x - v.x; cam.y += w.y - v.y;
 }
 function clampCam() {
   const d = Math.hypot(cam.x, cam.y), lim = radius + CLAMP_PAD;
@@ -87,7 +144,7 @@ addEventListener('pointermove', (e) => {
     touches.set(e.pointerId, { x, y });
     if (touches.size === 2 && pinch && active()) {
       const p = pinchState();
-      panScreen(pinch.mx - p.mx, pinch.my - p.my);
+      panGrab(pinch.mx, pinch.my, p.mx, p.my);
       const [lo, hi] = zoomLimits();
       tgtS = clamp(cam.s * p.d / Math.max(1, pinch.d), lo, hi);
       zoomAt(tgtS, p.mx, p.my);
@@ -98,7 +155,7 @@ addEventListener('pointermove', (e) => {
   ptr.x = x; ptr.y = y; ptr.inside = true; ptr.overUi = e.target !== cv;
   // middle button may be pressed while another button is already held (chorded press)
   if (e.buttons & 4) {
-    if (drag && active()) { panScreen(drag.x - x, drag.y - y); locked = false; anchor = null; }
+    if (drag && active()) { panGrab(drag.x, drag.y, x, y); locked = false; anchor = null; }
     drag = { x, y };
   } else drag = null;
 });
@@ -217,21 +274,32 @@ export function updateCamera(dt, view) {
 }
 
 // ---------------- screen-space overlay ----------------
+const scr = { x: 0, y: 0 };
 // off-screen arrows (my wizard, and the arena when it's fully out of view) + lock pill
 export function drawCameraHud(g, color = '#fff') {
   const W = innerWidth, H = innerHeight;
   arrowHit = null;
+  const off = (q, m) => q.x < -m || q.x > W + m || q.y < -m || q.y > H + m;
   if (me && me.alive) {
-    const sx = (me.x - cam.x) * cam.s + W / 2, sy = (me.y - cam.y) * cam.s + H / 2, m = PLAYER_R * cam.s;
-    if (sx < -m || sx > W + m || sy < -m || sy > H + m) {
-      const p = edgePoint(sx, sy, 46);
+    const m = PLAYER_R * cam.s;
+    if (!toScreen(me.x, me.y, mode3d ? 40 : 0, scr) || off(scr, m)) {
+      const p = edgePoint(scr.x, scr.y, 46);
       drawArrow(g, p, color, '#fff', 15);
       arrowHit = { x: p.x, y: p.y, r: 30 };
     }
   }
-  const ox = Math.max(0, Math.abs(cam.x) - W / 2 / cam.s), oy = Math.max(0, Math.abs(cam.y) - H / 2 / cam.s);
-  if (Math.hypot(ox, oy) > radius) {
-    const p = edgePoint(W / 2 - cam.x * cam.s, H / 2 - cam.y * cam.s, arrowHit ? 96 : 46);
+  let arenaGone;
+  if (mode3d) {
+    // the arena point nearest the look point is off-screen
+    const d = Math.hypot(cam.x, cam.y), k = d > radius ? radius / d : 1;
+    arenaGone = d > radius && (!toScreen(cam.x * k, cam.y * k, 0, scr) || off(scr, 0));
+  } else {
+    const ox = Math.max(0, Math.abs(cam.x) - W / 2 / cam.s), oy = Math.max(0, Math.abs(cam.y) - H / 2 / cam.s);
+    arenaGone = Math.hypot(ox, oy) > radius;
+  }
+  if (arenaGone) {
+    toScreen(0, 0, 0, scr);
+    const p = edgePoint(scr.x, scr.y, arrowHit ? 96 : 46);
     drawArrow(g, p, null, '#ff8a2a', 0);
   }
 
