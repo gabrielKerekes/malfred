@@ -41,3 +41,23 @@ function sane(g) {
   assert(deaths > 0 && kills > 0 && maxLevel > 2, 'brawl too quiet');
   console.log(`brawl ok: ${kills} kills, ${deaths} deaths, top level ${maxLevel} in 5 min`);
 }
+
+// projectiles from different casters cancel out, even head-on at full speed; same caster's don't
+{
+  const g = new Game('brawl');
+  const a = g.addPlayer('a'), b = g.addPlayer('b');
+  g.spawn(a, -300, 0); g.spawn(b, 300, 0);
+  g.cast(a.id, 'bolt', 300, 0); g.cast(b.id, 'bolt', -300, 0);
+  let clash = 0;
+  for (let i = 0; i < 30; i++) { g.step(); for (const e of g.snapshot().ev) if (e[0] === 'clash') clash++; }
+  assert.strictEqual(clash, 1, 'head-on bolts should clash once');
+  assert.strictEqual(g.projs.length, 0, 'both bolts gone');
+  assert(a.hp === a.maxHp && b.hp === b.maxHp, 'nobody hit');
+
+  const h = new Game('brawl');
+  const c = h.addPlayer('c'); h.spawn(c, 0, 0);
+  c.lv.seeker = 1; h.cast(c.id, 'bolt', 300, 0); h.cast(c.id, 'seeker', 300, 0);
+  for (let i = 0; i < 5; i++) h.step();
+  assert.strictEqual(h.projs.length, 2, "own projectiles don't cancel");
+  console.log('clash ok');
+}
