@@ -1,4 +1,5 @@
 import { SPELLS, SPELL_KEYS, TICK, PLAYER_R } from '/shared/game.js';
+import { sfx, setListener, setSizzle, toggleMute, isMuted } from './audio.js';
 
 const $ = (id) => document.getElementById(id);
 const cv = $('c'), ctx = cv.getContext('2d');
@@ -35,7 +36,8 @@ function connect(joinMsg) {
   sock.onmessage = (e) => onMsg(JSON.parse(e.data), sock);
   sock.onclose = () => {
     if (ws === sock) {
-      ws = null; $('hud').hidden = true; $('menu').style.display = '';
+      ws = null; $('hud').hidden = true; $('pause').hidden = true; $('menu').style.display = '';
+      setSizzle(false);
       $('err').textContent = 'Disconnected from server.';
     } else if ($('err').textContent === 'Connecting…') $('err').textContent = 'Could not connect.';
   };
@@ -75,6 +77,7 @@ function onMsg(m, sock) {
     snaps.push({ time: now, s });
     if (snaps.length > 30) snaps.shift();
     for (const ev of s.ev) pendingEv.push({ time: now, ev });
+    soundEvents(s, now);
     if (pendingEv.length > 400) pendingEv.splice(0, pendingEv.length - 400); // rAF is paused in hidden tabs
     const phaseChanged = !cur || cur.ph !== s.ph;
     cur = s; me = m.me;
@@ -82,6 +85,50 @@ function onMsg(m, sock) {
     updateBanner();
     if (phaseChanged) drawLobby();
   }
+}
+
+// ---------------- sound hooks ----------------
+// The server has no "cast" events, so new projectiles / meteor zones are diffed
+// against the previous snapshot and queued like events (same render delay).
+function soundEvents(s, now) {
+  const prev = cur;
+  if (prev) {
+    for (const j of s.J) if (!prev.Jm.has(j[0])) pendingEv.push({ time: now, ev: ['cast', j[1], j[2], j[3]] });
+    const zs = new Set(prev.Z.map((z) => z[0]));
+    for (const z of s.Z) if (!zs.has(z[0])) pendingEv.push({ time: now, ev: ['mcast', z[1], z[2], z[4] / TICK] });
+    if (mode === 'rounds') {
+      if (s.ph === 'inter' && s.pt !== prev.pt && s.pt <= 3) sfx.countdown(false);
+      if (s.ph === 'play' && prev.ph === 'inter') sfx.countdown(true);
+      if (s.ph === 'over' && prev.ph !== 'over') sfx.win();
+    }
+  }
+  const my = s.Pm.get(myId);
+  setSizzle(!!my && (my[5] & 5) === 5 && s.ph === 'play'); // alive and in lava
+}
+function updateMuteBtn() {
+  $('btnMute').textContent = isMuted() ? '🔇' : '🔊';
+  $('btnSound').textContent = isMuted() ? 'Sound: off (M)' : 'Sound: on (M)';
+}
+function flipMute() { toggleMute(); updateMuteBtn(); if (isMuted()) setSizzle(false); }
+$('btnMute').onclick = $('btnSound').onclick = flipMute;
+updateMuteBtn();
+
+// ---------------- in-game menu ----------------
+// The match keeps running server-side while this is open (it's multiplayer).
+const showPause = (on) => { $('pause').hidden = !on; };
+$('btnMenu').onclick = () => showPause(true);
+$('btnResume').onclick = () => showPause(false);
+$('pause').onpointerdown = (e) => { if (e.target === $('pause')) showPause(false); };
+$('btnLeave').onclick = leaveGame;
+function leaveGame() {
+  const sock = ws;
+  ws = null; // so onclose doesn't report "Disconnected"
+  if (sock) sock.close();
+  showPause(false); setSizzle(false);
+  $('hud').hidden = true; $('lobby').hidden = true; $('menu').style.display = '';
+  $('err').textContent = '';
+  history.replaceState(null, '', location.pathname);
+  snaps = []; cur = null; me = null;
 }
 
 // ---------------- lobby ----------------
@@ -151,6 +198,7 @@ function updateBar() {
     const canUp = me.pts > 0 && lv < d.max;
     const sig = `${lv}|${canUp}`;
     if (sig !== s.last) {
+      if (s.last && lv > +s.last.split('|')[0]) sfx.upgrade();
       s.last = sig;
       s.el.classList.toggle('locked', lv === 0);
       s.lv.textContent = '●'.repeat(lv) + '○'.repeat(d.max - lv);
@@ -202,6 +250,8 @@ function sendMove() {
   mouse.lastSend = performance.now();
 }
 function castAt(k) {
+  if (me && (!me.lv[k] || me.cd[k] > 0)) { sfx.denied(); return; }
+  if (k === 'ward') sfx.ward();
   const w = toWorld(mouse.x, mouse.y);
   send({ t: 'cast', s: k, x: Math.round(w.x), y: Math.round(w.y) });
 }
@@ -229,6 +279,7 @@ cv.addEventListener('pointermove', (e) => { mouse.x = e.clientX; mouse.y = e.cli
 addEventListener('pointerup', () => { mouse.down = false; });
 addEventListener('keydown', (e) => {
   if (!ws || e.target.tagName === 'INPUT' || e.repeat) return;
+  if (e.key === 'Escape') { showPause($('pause').hidden); e.preventDefault(); return; }
   const k = e.key.toLowerCase();
   // digits change with Shift held, so match passives by physical key
   const spell = KEYMAP[k] || (e.code === 'Digit1' ? 'vigor' : e.code === 'Digit2' ? 'swift' : null);
@@ -237,6 +288,7 @@ addEventListener('keydown', (e) => {
     else castAt(spell);
     e.preventDefault();
   } else if (k === 's') send({ t: 'stop' });
+  else if (k === 'm') flipMute();
 });
 
 // ---------------- effects ----------------
@@ -248,6 +300,15 @@ function burst(x, y, n, color, speed, life = 0.5, size = 3) {
 }
 function handleEvent(ev) {
   const [type, a, b, c, d] = ev;
+  if (type === 'cast') { if (a) sfx.seeker(b, c); else sfx.bolt(b, c); return; }
+  if (type === 'mcast') { sfx.meteorCast(a, b, c); return; }
+  if (type === 'hit') sfx.hit(a, b, c);
+  else if (type === 'refl') sfx.reflect(a, b);
+  else if (type === 'shock') sfx.shock(a, b);
+  else if (type === 'boom') sfx.boom(a, b);
+  else if (type === 'blink') sfx.blink(c, d);
+  else if (type === 'lvl' && a === myId) sfx.level();
+  else if (type === 'die') { sfx.die(c, d, a === myId); if (b === myId && a !== myId) sfx.kill(); }
   if (type === 'hit') burst(a, b, 12, c ? '#b9f' : '#fb5', 220);
   else if (type === 'refl') burst(a, b, 8, '#aef', 180);
   else if (type === 'shock') { rings.push({ x: a, y: b, r: c, t: 0, max: 0.35, color: '#9df' }); }
@@ -334,6 +395,7 @@ function frame(now) {
   cam.s = lerp(cam.s, Math.max(0.35, ts), k);
   cam.x = lerp(cam.x, follow ? mine.x : 0, k); cam.y = lerp(cam.y, follow ? mine.y : 0, k);
 
+  setListener(cam.x, cam.y, cam.s, W);
   ctx.save();
   ctx.translate(W / 2, H / 2); ctx.scale(cam.s, cam.s); ctx.translate(-cam.x, -cam.y);
   const vw = W / cam.s, vh = H / cam.s;
