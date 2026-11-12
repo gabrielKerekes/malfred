@@ -1,5 +1,6 @@
 import { SPELLS, SPELL_KEYS, TICK, PLAYER_R } from '/shared/game.js';
 import { sfx, setListener, setSizzle, toggleMute, isMuted } from './audio.js';
+import { cam, toWorld, updateCamera, drawCameraHud, touchGesture } from './camera.js';
 
 const $ = (id) => document.getElementById(id);
 const cv = $('c'), ctx = cv.getContext('2d');
@@ -18,7 +19,6 @@ let parts = [];            // particles
 let rings = [];            // expanding ring effects
 let feed = [];
 let mouse = { x: 0, y: 0, down: false, lastSend: 0 };
-let cam = { x: 0, y: 0, s: 1 };
 let moveMark = null;
 let W = 0, H = 0;
 
@@ -241,8 +241,6 @@ function drawFeed() {
 setInterval(() => { const n = performance.now(); const l = feed.length; feed = feed.filter((f) => n - f.time < 7000); if (feed.length !== l) drawFeed(); }, 1000);
 
 // ---------------- input ----------------
-const toWorld = (mx, my) => ({ x: (mx - W / 2) / cam.s + cam.x, y: (my - H / 2) / cam.s + cam.y });
-
 function sendMove() {
   const w = toWorld(mouse.x, mouse.y);
   send({ t: 'move', x: Math.round(w.x), y: Math.round(w.y) });
@@ -271,6 +269,7 @@ function castAtNearest(k) {
 cv.addEventListener('contextmenu', (e) => e.preventDefault());
 cv.addEventListener('pointerdown', (e) => {
   mouse.x = e.clientX; mouse.y = e.clientY;
+  if (e.pointerType === 'touch' && touchGesture()) { mouse.down = false; return; } // two-finger pan/pinch
   // Ctrl+click is the macOS one-button right-click, so treat it as move too
   if (e.pointerType === 'touch' || e.button === 2 || (e.button === 0 && e.ctrlKey)) { mouse.down = true; sendMove(); }
   else if (e.button === 0) castAt('bolt');
@@ -280,6 +279,7 @@ addEventListener('pointerup', () => { mouse.down = false; });
 addEventListener('keydown', (e) => {
   if (!ws || e.target.tagName === 'INPUT' || e.repeat) return;
   if (e.key === 'Escape') { showPause($('pause').hidden); e.preventDefault(); return; }
+  if (!$('pause').hidden) return; // no casting from behind the menu
   const k = e.key.toLowerCase();
   // digits change with Shift held, so match passives by physical key
   const spell = KEYMAP[k] || (e.code === 'Digit1' ? 'vigor' : e.code === 'Digit2' ? 'swift' : null);
@@ -388,12 +388,8 @@ function frame(now) {
   }
   const mine = players.find((p) => p.id === myId);
 
-  // camera: follow me; when dead, pull back to show the whole arena
-  const follow = mine && mine.alive;
-  const ts = follow ? Math.min(W, H) / 900 : Math.min(W, H) / (2 * radius + 260);
-  const k = 1 - Math.exp(-6 * dt);
-  cam.s = lerp(cam.s, Math.max(0.35, ts), k);
-  cam.x = lerp(cam.x, follow ? mine.x : 0, k); cam.y = lerp(cam.y, follow ? mine.y : 0, k);
+  // camera (free / locked / spectator overview): see camera.js
+  updateCamera(dt, { me: mine, radius, round: b.rd, id: myId });
 
   setListener(cam.x, cam.y, cam.s, W);
   ctx.save();
@@ -502,16 +498,8 @@ function frame(now) {
   ctx.globalAlpha = 1;
   ctx.restore();
 
-  // arrow back to the arena when it is off-screen
-  if (follow) {
-    const d = Math.hypot(mine.x, mine.y);
-    if (d - radius > Math.min(vw, vh) / 2 - 40) {
-      const ang = Math.atan2(-mine.y, -mine.x), rr = Math.min(W, H) / 2 - 50;
-      ctx.save(); ctx.translate(W / 2 + Math.cos(ang) * rr, H / 2 + Math.sin(ang) * rr); ctx.rotate(ang);
-      ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(16, 0); ctx.lineTo(-10, -11); ctx.lineTo(-10, 11); ctx.fill();
-      ctx.restore();
-    }
-  }
+  // off-screen arrows toward my wizard / the arena, camera lock indicator
+  drawCameraHud(ctx, roster.get(myId)?.color);
 }
 
 function drawBackdrop(now) {
