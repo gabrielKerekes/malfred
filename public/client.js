@@ -1,10 +1,14 @@
-import { SPELLS, SPELL_KEYS, TICK, PLAYER_R } from '/shared/game.js';
+import { SPELLS, SPELL_KEYS, TICK } from '/shared/game.js';
 import { sfx, setListener, setSizzle, toggleMute, isMuted } from './audio.js';
 import { cam, toWorld, updateCamera, drawCameraHud, touchGesture } from './camera.js';
+import {
+  drawLava, drawArena, drawZones, drawPlayers, drawProjectiles, drawEffects, drawVignette, drawBackdrop as paintBackdrop,
+  fxEvent, resetFx, shakeOffset,
+} from './render.js';
+import { ICONS, FEED_KILL, FEED_LAVA } from './icons.js';
 
 const $ = (id) => document.getElementById(id);
 const cv = $('c'), ctx = cv.getContext('2d');
-const ICON = { bolt: '🔥', seeker: '✨', shock: '💥', meteor: '☄️', blink: '🌀', ward: '🛡️', vigor: '❤️', swift: '👟' };
 const KEYMAP = {};
 for (const k of SPELL_KEYS) KEYMAP[SPELLS[k].key.toLowerCase()] = k;
 const INTERP = 110; // ms of render delay used to smooth snapshots
@@ -15,9 +19,7 @@ let snaps = [];            // {time, s, P: Map}
 let me = null;             // private state: pts, lv, cd
 let cur = null;            // latest snapshot
 let pendingEv = [];        // {time, ev}
-let parts = [];            // particles
-let rings = [];            // expanding ring effects
-let feed = [];
+let feed = [];             // {el, time}
 let mouse = { x: 0, y: 0, down: false, lastSend: 0 };
 let moveMark = null;
 let W = 0, H = 0;
@@ -53,7 +55,7 @@ function onMsg(m, sock) {
   if (m.t === 'err') { $('err').textContent = m.m; sock.close(); return; }
   if (m.t === 'joined') {
     ws = sock; myId = m.id; mode = m.mode; code = m.code;
-    snaps = []; cur = null; feed = []; parts = []; rings = []; pendingEv = [];
+    snaps = []; cur = null; feed = []; pendingEv = []; resetFx(); $('feed').replaceChildren();
     $('menu').style.display = 'none'; $('hud').hidden = false; $('err').textContent = '';
     const link = `${location.origin}/?room=${code}`;
     if (mode === 'rounds') {
@@ -162,15 +164,18 @@ function drawBoard() {
   const list = [...roster.values()].sort((a, b) => brawl ? (b.level - a.level || b.kills - a.kills) : (b.score - a.score || b.kills - a.kills));
   const t = document.createElement('table');
   const hd = t.insertRow();
-  for (const h of ['', brawl ? 'Lvl' : 'Wins', 'Kills']) { const th = document.createElement('th'); th.textContent = h; hd.appendChild(th); }
-  for (const p of list) {
+  for (const h of ['#', brawl ? 'Wizards' : 'Standings', brawl ? 'Lvl' : 'Wins', 'KO']) { const th = document.createElement('th'); th.textContent = h; hd.appendChild(th); }
+  list.forEach((p, i) => {
     const r = t.insertRow();
     if (p.id === myId) r.className = 'me';
+    r.style.setProperty('--c', p.color);
+    r.insertCell().textContent = i + 1;
     const c = r.insertCell(); const dot = document.createElement('i'); dot.style.background = p.color;
-    c.append(dot, p.name);
+    const nm = document.createElement('span'); nm.textContent = p.name + (p.bot ? '' : p.id === myId ? ' (you)' : '');
+    c.append(dot, nm);
     r.insertCell().textContent = brawl ? p.level : p.score;
     r.insertCell().textContent = p.kills;
-  }
+  });
   $('board').replaceChildren(t);
 }
 
@@ -180,13 +185,15 @@ function buildBar() {
   for (const k of SPELL_KEYS) {
     const d = SPELLS[k];
     const el = document.createElement('div');
-    el.className = 'slot' + (d.passive ? ' passive' : '');
-    el.title = `${d.name} [${d.key}] — ${d.desc}`;
-    el.innerHTML = `<span class="k">${d.key}</span><div class="ico">${ICON[k]}</div><div class="lv"></div><div class="cdm"></div><button class="up" hidden>+</button>`;
+    el.className = `slot s-${k}` + (d.passive ? ' passive' : '');
+    // name/desc/key are static spell constants, never user input
+    el.innerHTML = `<div class="face"><div class="ico">${ICONS[k]}</div><div class="cdm"></div><span class="cdt"></span></div>`
+      + `<span class="k">${d.key}</span><div class="lv"></div><button class="up" hidden aria-label="Upgrade ${d.name}">+</button>`
+      + `<div class="tip"><div class="tt"><b>${d.name}</b><kbd>${d.key}</kbd></div><p>${d.desc}</p><div class="tl"></div></div>`;
     const up = el.querySelector('.up');
     up.onclick = (e) => { e.stopPropagation(); send({ t: 'up', s: k }); };
     if (!d.passive) el.onclick = () => castAtNearest(k);
-    slots[k] = { el, lv: el.querySelector('.lv'), cd: el.querySelector('.cdm'), up, last: '' };
+    slots[k] = { el, lv: el.querySelector('.lv'), cd: el.querySelector('.cdm'), cdt: el.querySelector('.cdt'), tl: el.querySelector('.tl'), up, last: '', p: -1, txt: '' };
     $('bar').appendChild(el);
   }
 }
@@ -201,14 +208,33 @@ function updateBar() {
       if (s.last && lv > +s.last.split('|')[0]) sfx.upgrade();
       s.last = sig;
       s.el.classList.toggle('locked', lv === 0);
-      s.lv.textContent = '●'.repeat(lv) + '○'.repeat(d.max - lv);
+      s.el.classList.toggle('can-up', canUp);
+      s.lv.innerHTML = '<i class="on"></i>'.repeat(lv) + '<i></i>'.repeat(d.max - lv);
       s.up.hidden = !canUp;
+      let info = lv ? `Level ${lv} / ${d.max}` : 'Not learned yet: spend an upgrade point';
+      if (!d.passive) info += ` · ${d.cd(Math.max(1, lv)).toFixed(1)}s cooldown`;
+      if (canUp) info += ` · Shift+${d.key} to upgrade`;
+      s.tl.textContent = info;
     }
-    if (!d.passive) s.cd.style.height = lv ? `${Math.min(100, 100 * me.cd[k] / (d.cd(lv) * TICK))}%` : '0';
+    if (d.passive) continue;
+    const left = lv ? me.cd[k] : 0;
+    const p = lv ? Math.min(1, left / (d.cd(lv) * TICK)) : 0;
+    if (p !== s.p) {
+      if (p === 0 && s.p > 0) { s.el.classList.remove('ready'); void s.el.offsetWidth; s.el.classList.add('ready'); }
+      s.p = p; s.cd.style.setProperty('--p', p.toFixed(3));
+    }
+    const sec = left / TICK;
+    const txt = left > 0 ? (sec >= 1 ? String(Math.ceil(sec)) : sec.toFixed(1)) : '';
+    if (txt !== s.txt) { s.txt = txt; s.cdt.textContent = txt; }
   }
-  let t = me.pts > 0 ? `${me.pts} upgrade point${me.pts > 1 ? 's' : ''} — click + or Shift+key` : '';
-  if (mode === 'brawl') t = `Level ${roster.get(myId)?.level ?? 1} · ${me.xp}/${me.need} xp` + (t ? ' · ' + t : '');
+  let t = me.pts > 0 ? `${me.pts} upgrade point${me.pts > 1 ? 's' : ''}: click + or Shift+key` : '';
+  if (mode === 'brawl') {
+    t = `Level ${roster.get(myId)?.level ?? 1}` + (t ? ' · ' + t : '');
+    $('xp').hidden = false;
+    $('xpFill').style.width = `${Math.min(100, (100 * me.xp) / me.need)}%`;
+  } else $('xp').hidden = true;
   $('pts').textContent = t;
+  $('pts').classList.toggle('glow', me.pts > 0);
 }
 
 function updateBanner() {
@@ -225,20 +251,40 @@ function updateBanner() {
   } else if (!alive) { h = 'Burned!'; sub = 'Respawning with a fresh build…'; }
   const sig = h + '|' + sub;
   if (b.dataset.sig !== sig) {
-    b.dataset.sig = sig; b.textContent = h;
+    const headChanged = (b.dataset.h || '') !== h;
+    b.dataset.sig = sig; b.dataset.h = h; b.textContent = h;
     if (sub) { const s = document.createElement('small'); s.textContent = sub; b.appendChild(s); }
+    if (headChanged && h) { b.classList.remove('pop'); void b.offsetWidth; b.classList.add('pop'); }
   }
 }
 
-function addFeed(text) {
-  feed.push({ text, time: performance.now() });
-  if (feed.length > 5) feed.shift();
-  drawFeed();
+// kill feed: rows are appended/removed individually so their CSS animations don't restart
+function feedName(p) {
+  const s = document.createElement('b');
+  s.textContent = p?.name || '?';
+  if (p?.color) s.style.color = p.color;
+  return s;
 }
-function drawFeed() {
-  $('feed').replaceChildren(...feed.map((f) => { const d = document.createElement('div'); d.textContent = f.text; return d; }));
+function addFeed(killer, victim) {
+  const row = document.createElement('div');
+  const via = document.createElement('span'); via.className = 'via';
+  if (killer) {
+    via.innerHTML = FEED_KILL;
+    row.append(feedName(killer), via, feedName(victim));
+  } else {
+    via.innerHTML = FEED_LAVA;
+    const t = document.createElement('span'); t.textContent = 'burned in the lava';
+    row.append(feedName(victim), via, t);
+  }
+  if (victim?.id === myId || killer?.id === myId) row.className = 'mine';
+  $('feed').appendChild(row);
+  feed.push({ el: row, time: performance.now() });
+  if (feed.length > 5) feed.shift().el.remove();
 }
-setInterval(() => { const n = performance.now(); const l = feed.length; feed = feed.filter((f) => n - f.time < 7000); if (feed.length !== l) drawFeed(); }, 1000);
+setInterval(() => {
+  const n = performance.now();
+  while (feed.length && n - feed[0].time > 7000) feed.shift().el.remove();
+}, 500);
 
 // ---------------- input ----------------
 function sendMove() {
@@ -292,14 +338,9 @@ addEventListener('keydown', (e) => {
 });
 
 // ---------------- effects ----------------
-function burst(x, y, n, color, speed, life = 0.5, size = 3) {
-  for (let i = 0; i < n; i++) {
-    const a = Math.random() * Math.PI * 2, v = speed * (0.3 + Math.random() * 0.7);
-    parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v, life, max: life, color, size: size * (0.5 + Math.random()) });
-  }
-}
 function handleEvent(ev) {
   const [type, a, b, c, d] = ev;
+  // sounds (cast/mcast are client-side events synthesized for audio only)
   if (type === 'cast') { if (a) sfx.seeker(b, c); else sfx.bolt(b, c); return; }
   if (type === 'mcast') { sfx.meteorCast(a, b, c); return; }
   if (type === 'hit') sfx.hit(a, b, c);
@@ -309,17 +350,9 @@ function handleEvent(ev) {
   else if (type === 'blink') sfx.blink(c, d);
   else if (type === 'lvl' && a === myId) sfx.level();
   else if (type === 'die') { sfx.die(c, d, a === myId); if (b === myId && a !== myId) sfx.kill(); }
-  if (type === 'hit') burst(a, b, 12, c ? '#b9f' : '#fb5', 220);
-  else if (type === 'refl') burst(a, b, 8, '#aef', 180);
-  else if (type === 'shock') { rings.push({ x: a, y: b, r: c, t: 0, max: 0.35, color: '#9df' }); }
-  else if (type === 'boom') { rings.push({ x: a, y: b, r: c, t: 0, max: 0.45, color: '#f93' }); burst(a, b, 36, '#f73', 380, 0.7, 5); }
-  else if (type === 'blink') { burst(a, b, 12, '#c9f', 120); burst(c, d, 12, '#c9f', 120); }
-  else if (type === 'lvl') { const p = cur?.Pm.get(a); if (p) rings.push({ x: p[1], y: p[2], r: 50, t: 0, max: 0.5, color: '#fd4' }); }
-  else if (type === 'die') {
-    burst(c, d, 40, '#f52', 300, 0.9, 5);
-    const v = roster.get(a)?.name || '?', k = roster.get(b)?.name;
-    addFeed(k ? `${k} knocked out ${v}` : `${v} fell into the lava`);
-  }
+  // visuals
+  fxEvent(ev, { P: cur?.P, myId, cam });
+  if (type === 'die') addFeed(b ? roster.get(b) || { name: '?' } : null, roster.get(a) || { name: '?' });
 }
 
 // ---------------- rendering ----------------
@@ -330,23 +363,6 @@ function resize() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 addEventListener('resize', resize); resize();
-
-// tiling lava texture
-const lava = document.createElement('canvas'); lava.width = lava.height = 256;
-{
-  const g = lava.getContext('2d');
-  g.fillStyle = '#8f1d05'; g.fillRect(0, 0, 256, 256);
-  for (let i = 0; i < 70; i++) {
-    const x = Math.random() * 256, y = Math.random() * 256, r = 10 + Math.random() * 34;
-    const hot = Math.random() < 0.5;
-    for (const ox of [-256, 0, 256]) for (const oy of [-256, 0, 256]) {
-      const gr = g.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, r);
-      gr.addColorStop(0, hot ? '#ff9a1fcc' : '#3d0b02cc'); gr.addColorStop(1, hot ? '#ff9a1f00' : '#3d0b0200');
-      g.fillStyle = gr; g.beginPath(); g.arc(x + ox, y + oy, r, 0, 7); g.fill();
-    }
-  }
-}
-const lavaPat = ctx.createPattern(lava, 'repeat');
 
 function sample(now) {
   // find the two snapshots around render time and interpolate
@@ -392,44 +408,16 @@ function frame(now) {
   updateCamera(dt, { me: mine, radius, round: b.rd, id: myId });
 
   setListener(cam.x, cam.y, cam.s, W);
+  const [shx, shy] = shakeOffset(dt);
   ctx.save();
+  ctx.translate(shx, shy); // subtle screen shake, applied before the camera transform
   ctx.translate(W / 2, H / 2); ctx.scale(cam.s, cam.s); ctx.translate(-cam.x, -cam.y);
   const vw = W / cam.s, vh = H / cam.s;
 
-  // lava
-  ctx.save();
-  const off = (now / 60) % 256;
-  ctx.translate(off, off * 0.6);
-  ctx.fillStyle = lavaPat;
-  ctx.fillRect(cam.x - vw / 2 - off - 1, cam.y - vh / 2 - off * 0.6 - 1, vw + 2, vh + 2);
-  ctx.restore();
-
-  // platform
-  ctx.save();
-  ctx.shadowColor = '#ffb347'; ctx.shadowBlur = 40;
-  ctx.beginPath(); ctx.arc(0, 0, radius, 0, Math.PI * 2);
-  const pg = ctx.createRadialGradient(0, 0, radius * 0.2, 0, 0, radius);
-  pg.addColorStop(0, '#6d655f'); pg.addColorStop(0.85, '#514942'); pg.addColorStop(1, '#2e2622');
-  ctx.fillStyle = pg; ctx.fill();
-  ctx.shadowBlur = 0; ctx.clip();
-  ctx.strokeStyle = '#0000002e'; ctx.lineWidth = 2;
-  ctx.beginPath();
-  for (let g = -Math.ceil(radius / 80) * 80; g <= radius; g += 80) {
-    ctx.moveTo(g, -radius); ctx.lineTo(g, radius); ctx.moveTo(-radius, g); ctx.lineTo(radius, g);
-  }
-  ctx.stroke();
-  ctx.restore();
-  ctx.strokeStyle = '#ff8a2a'; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.arc(0, 0, radius, 0, Math.PI * 2); ctx.stroke();
-
-  // meteor warnings
-  for (const z of b.Z) {
-    const p = 1 - z[4] / (SPELLS.meteor.delay * TICK);
-    ctx.fillStyle = '#ff450033'; ctx.strokeStyle = '#ff6a00';
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(z[1], z[2], z[3], 0, 7); ctx.fill(); ctx.stroke();
-    ctx.beginPath(); ctx.arc(z[1], z[2], z[3] * Math.min(1, p), 0, 7); ctx.fillStyle = '#ff6a0055'; ctx.fill();
-  }
+  const view = { x: cam.x - vw / 2, y: cam.y - vh / 2, w: vw, h: vh };
+  drawLava(ctx, now, view);
+  drawArena(ctx, radius, now);
+  drawZones(ctx, a, b, f, now);
 
   if (moveMark && now - moveMark.t < 400) {
     const q = (now - moveMark.t) / 400;
@@ -437,76 +425,15 @@ function frame(now) {
     ctx.beginPath(); ctx.arc(moveMark.x, moveMark.y, 14 * (1 - q) + 3, 0, 7); ctx.stroke();
   }
 
-  // players
-  ctx.textAlign = 'center';
-  for (const p of players) {
-    if (!p.alive) continue;
-    const info = roster.get(p.id) || { color: '#ccc', name: '' };
-    ctx.fillStyle = '#0006';
-    ctx.beginPath(); ctx.ellipse(p.x + 3, p.y + 6, PLAYER_R, PLAYER_R * 0.8, 0, 0, 7); ctx.fill();
-    // staff
-    ctx.strokeStyle = '#e8d9b0'; ctx.lineWidth = 4; ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.moveTo(p.x + Math.cos(p.face) * 8, p.y + Math.sin(p.face) * 8);
-    ctx.lineTo(p.x + Math.cos(p.face) * 30, p.y + Math.sin(p.face) * 30); ctx.stroke();
-    // robe + hood
-    ctx.fillStyle = info.color;
-    ctx.beginPath(); ctx.arc(p.x, p.y, PLAYER_R, 0, 7); ctx.fill();
-    ctx.lineWidth = p.id === myId ? 3 : 2; ctx.strokeStyle = p.id === myId ? '#fff' : '#0009'; ctx.stroke();
-    ctx.fillStyle = '#0005';
-    ctx.beginPath(); ctx.arc(p.x - Math.cos(p.face) * 3, p.y - Math.sin(p.face) * 3, PLAYER_R * 0.55, 0, 7); ctx.fill();
-    if (p.lava && Math.random() < 0.5) burst(p.x, p.y, 1, '#fa3', 90, 0.4);
-    if (p.ward) {
-      ctx.strokeStyle = '#9fe8ff'; ctx.lineWidth = 3; ctx.shadowColor = '#9fe8ff'; ctx.shadowBlur = 12;
-      ctx.beginPath(); ctx.arc(p.x, p.y, PLAYER_R + 8 + Math.sin(now / 60) * 1.5, 0, 7); ctx.stroke();
-      ctx.shadowBlur = 0;
-    }
-    // hp bar + name
-    const bw = 44, hx = p.x - bw / 2, hy = p.y - PLAYER_R - 16, hf = Math.max(0, p.hp / p.maxHp);
-    ctx.fillStyle = '#000a'; ctx.fillRect(hx - 1, hy - 1, bw + 2, 7);
-    ctx.fillStyle = hf > 0.5 ? '#5d5' : hf > 0.25 ? '#ec3' : '#e43'; ctx.fillRect(hx, hy, bw * hf, 5);
-    ctx.font = '600 13px system-ui, sans-serif';
-    ctx.lineWidth = 3; ctx.strokeStyle = '#000b'; ctx.strokeText(info.name, p.x, hy - 6);
-    ctx.fillStyle = '#fff'; ctx.fillText(info.name, p.x, hy - 6);
-  }
-
-  // projectiles
-  for (const jb of b.J) {
-    const ja = a.Jm.get(jb[0]) || jb;
-    const x = lerp(ja[2], jb[2], f), y = lerp(ja[3], jb[3], f);
-    const seeker = jb[1] === 1, r = seeker ? 13 : 10;
-    const gr = ctx.createRadialGradient(x, y, 0, x, y, r * 2.2);
-    gr.addColorStop(0, '#fff'); gr.addColorStop(0.35, seeker ? '#b48cff' : '#ffb13d'); gr.addColorStop(1, seeker ? '#b48cff00' : '#ff5a0000');
-    ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(x, y, r * 2.2, 0, 7); ctx.fill();
-    if (jb[4] === myId) { ctx.strokeStyle = '#fff8'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y, r, 0, 7); ctx.stroke(); }
-    if (Math.random() < 0.6) parts.push({ x, y, vx: 0, vy: 0, life: 0.25, max: 0.25, color: seeker ? '#b48cff' : '#ff8a2a', size: 4 });
-  }
-
-  // rings + particles
-  rings = rings.filter((r) => (r.t += dt) < r.max);
-  for (const r of rings) {
-    const q = r.t / r.max;
-    ctx.globalAlpha = 1 - q; ctx.strokeStyle = r.color; ctx.lineWidth = 6;
-    ctx.beginPath(); ctx.arc(r.x, r.y, r.r * (0.3 + 0.7 * q), 0, 7); ctx.stroke();
-  }
-  parts = parts.filter((p) => (p.life -= dt) > 0);
-  if (parts.length > 900) parts.splice(0, parts.length - 900);
-  for (const p of parts) {
-    p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 0.94; p.vy *= 0.94;
-    ctx.globalAlpha = p.life / p.max; ctx.fillStyle = p.color;
-    ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (p.life / p.max), 0, 7); ctx.fill();
-  }
-  ctx.globalAlpha = 1;
+  drawPlayers(ctx, players, roster, myId, now, dt);
+  drawProjectiles(ctx, a, b, f, myId, now);
+  drawEffects(ctx, dt, now, view, radius);
   ctx.restore();
+  drawVignette(ctx, W, H, now);
 
   // off-screen arrows toward my wizard / the arena, camera lock indicator
   drawCameraHud(ctx, roster.get(myId)?.color);
 }
 
-function drawBackdrop(now) {
-  ctx.save();
-  const off = (now / 60) % 256;
-  ctx.translate(off, off * 0.6);
-  ctx.fillStyle = lavaPat; ctx.fillRect(-off - 1, -off * 0.6 - 1, W + 2, H + 2);
-  ctx.restore();
-}
+function drawBackdrop(now) { paintBackdrop(ctx, now, W, H); }
 requestAnimationFrame(frame);
