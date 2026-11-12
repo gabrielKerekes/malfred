@@ -361,8 +361,14 @@ export class Game {
           j.vx = Math.cos(cur + turn) * def.speed; j.vy = Math.sin(cur + turn) * def.speed;
         }
       }
+      j.px = j.x; j.py = j.y;
       j.x += j.vx * DT; j.y += j.vy * DT;
-      if (--j.life <= 0) { j.dead = true; continue; }
+      if (--j.life <= 0) j.dead = true;
+    }
+    this.clashProjectiles();
+    for (const j of this.projs) {
+      if (j.dead) continue;
+      const def = SPELLS[j.type];
       for (const t of al) {
         if (t.id === j.owner || !t.alive) continue;
         if (hyp(t.x - j.x, t.y - j.y) > PLAYER_R + def.r) continue;
@@ -394,6 +400,32 @@ export class Game {
       this.ev('boom', Math.round(z.x), Math.round(z.y), z.r);
     }
     this.zones = this.zones.filter((z) => z.t > 0);
+  }
+
+  // Projectiles from different casters that touch cancel each other out. Swept test:
+  // closest approach during this tick, so fast head-on bolts can't tunnel through.
+  clashProjectiles() {
+    const J = this.projs;
+    for (let i = 0; i < J.length; i++) {
+      const a = J[i];
+      if (a.dead) continue;
+      for (let k = i + 1; k < J.length; k++) {
+        const b = J[k];
+        if (b.dead || b.owner === a.owner) continue;
+        const R = SPELLS[a.type].r + SPELLS[b.type].r;
+        const dx = a.px - b.px, dy = a.py - b.py;                         // separation at tick start
+        const mx = (a.x - a.px) - (b.x - b.px), my = (a.y - a.py) - (b.y - b.py); // relative motion
+        const mm = mx * mx + my * my;
+        const t = mm > 0 ? Math.max(0, Math.min(1, -(dx * mx + dy * my) / mm)) : 0;
+        const cx = dx + mx * t, cy = dy + my * t;
+        if (cx * cx + cy * cy > R * R) continue;
+        a.dead = b.dead = true;
+        const ex = a.px + (a.x - a.px) * t, ey = a.py + (a.y - a.py) * t;
+        this.ev('clash', Math.round((ex + b.px + (b.x - b.px) * t) / 2), Math.round((ey + b.py + (b.y - b.py) * t) / 2),
+          a.type === 'bolt' ? 0 : 1, b.type === 'bolt' ? 0 : 1);
+        break;
+      }
+    }
   }
 
   // ---------- bots ----------
