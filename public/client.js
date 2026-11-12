@@ -397,8 +397,10 @@ function handleEvent(ev) {
   if (type === 'mcast') { sfx.meteorCast(a, b, c); return; }
   if (type === 'clash') { // two projectiles cancelled: an impact burst for each kind, no damage
     sfx.hit(a, b, c && d);
-    fxEvent(['hit', a, b, c], { P: cur?.P, myId, cam });
-    if (d !== c) fxEvent(['hit', a, b, d], { P: cur?.P, myId, cam });
+    const env = { P: cur?.P, myId, cam };
+    const fx = (e) => (use3d() ? r3d.fxEvent(e, env) : fxEvent(e, env));
+    fx(['hit', a, b, c]);
+    if (d !== c) fx(['hit', a, b, d]);
     return;
   }
   if (type === 'hit') sfx.hit(a, b, c);
