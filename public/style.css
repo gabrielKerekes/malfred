@@ -70,3 +70,10 @@ input { background: #150c0a; border: 1px solid #6b4a3a; border-radius: 6px; padd
 #pause { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 16px; background: #0008; }
 #pause .card { width: min(300px, 100%); }
 @media (max-width: 640px) { #sysBtns { bottom: auto; top: 10px; right: auto; left: 50%; transform: translateX(-50%); } }
+
+#credit { position: fixed; left: 12px; bottom: 8px; z-index: 30; font-size: 12px; color: #c9a58c;
+  text-decoration: none; text-shadow: 0 1px 3px #000; opacity: .8; display: inline-flex; align-items: center; gap: 4px; }
+#credit:hover { opacity: 1; color: #ffb066; }
+#pause a { color: #ffb066; }
+/* phones: the spell bar owns the bottom edge in game, so the credit lives in the Esc menu there */
+@media (max-width: 640px) { #hud:not([hidden]) ~ #credit { display: none; } }

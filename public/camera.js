@@ -237,7 +237,7 @@ export function drawCameraHud(g, color = '#fff') {
     : (narrow ? '🎥 Free cam' : '🎥 Free camera · Space centre · Y lock');
   g.save();
   g.font = '600 12px system-ui, sans-serif';
-  const w = g.measureText(text).width + 18, h = 22, x = 12, y = narrow ? H - 104 : H - 12 - h;
+  const w = g.measureText(text).width + 18, h = 22, x = 12, y = narrow ? H - 104 : H - 34 - h; // room for the credit link below
   g.fillStyle = locked ? '#7a3d0ccc' : '#000000a0';
   g.strokeStyle = locked ? '#ffb066' : '#ffffff40'; g.lineWidth = 1;
   g.beginPath(); g.roundRect ? g.roundRect(x, y, w, h, 11) : g.rect(x, y, w, h); g.fill(); g.stroke();
