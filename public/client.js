@@ -227,14 +227,30 @@ function updateBar() {
     const txt = left > 0 ? (sec >= 1 ? String(Math.ceil(sec)) : sec.toFixed(1)) : '';
     if (txt !== s.txt) { s.txt = txt; s.cdt.textContent = txt; }
   }
-  let t = me.pts > 0 ? `${me.pts} upgrade point${me.pts > 1 ? 's' : ''}: click + or Shift+key` : '';
+  const t = me.pts > 0 ? `${me.pts} upgrade point${me.pts > 1 ? 's' : ''}: click + or Shift+key` : '';
   if (mode === 'brawl') {
-    t = `Level ${roster.get(myId)?.level ?? 1}` + (t ? ' · ' + t : '');
     $('xp').hidden = false;
     $('xpFill').style.width = `${Math.min(100, (100 * me.xp) / me.need)}%`;
+    setText('xpTxt', `Level ${roster.get(myId)?.level ?? 1} · ${me.xp} / ${me.need} XP`);
   } else $('xp').hidden = true;
+  updateHp();
   $('pts').textContent = t;
   $('pts').classList.toggle('glow', me.pts > 0);
+}
+
+const setText = (id, t) => { const el = $(id); if (el.textContent !== t) el.textContent = t; };
+// my health bar: numbers + colour by fraction; the pale "lag" part shows recent damage
+let hpLag = 1;
+function updateHp() {
+  const my = cur?.Pm.get(myId);
+  if (!my) return;
+  const hp = my[3], max = my[4], alive = my[5] & 1, f = alive ? Math.max(0, Math.min(1, hp / max)) : 0;
+  hpLag = f > hpLag ? f : Math.max(f, hpLag - 0.04);
+  $('hpFill').style.width = `${f * 100}%`;
+  $('hpLag').style.width = `${hpLag * 100}%`;
+  $('hp').dataset.lvl = !alive ? 'dead' : f > 0.5 ? 'ok' : f > 0.25 ? 'mid' : 'low';
+  $('hp').classList.toggle('burn', !!(my[5] & 4) && !!alive);
+  setText('hpTxt', alive ? `${hp} / ${max}` : `0 / ${max}`);
 }
 
 function updateBanner() {
