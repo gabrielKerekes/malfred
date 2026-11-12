@@ -12,6 +12,8 @@ const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
   '.m4a': 'audio/mp4', '.png': 'image/png', '.webp': 'image/webp',
+  '.glb': 'model/gltf-binary', '.gltf': 'model/gltf+json', '.bin': 'application/octet-stream',
+  '.ktx2': 'image/ktx2', '.json': 'application/json',
 };
 const BRAWL_MAX_HUMANS = 14;
 const BRAWL_MIN_FIGHTERS = 6;
