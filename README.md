@@ -28,13 +28,28 @@ Fall off and you burn. It is an original game in the "knockback arena" genre.
 | Mouse wheel | Zoom toward the cursor |
 | `Space` (tap / hold) | Snap to / keep the camera on your wizard |
 | `Y` or double-tap `Space` | Toggle camera lock (follow your wizard) |
-| `Esc` or ☰ | Menu: resume, sound on/off, leave game |
+| `Esc` or ☰ | Menu: resume, sound on/off, graphics 3D / 2D, leave game |
 | `M` or 🔊 | Sound on/off |
 
 The camera is free by default (Warcraft III style) and jumps to your wizard when you
 join, respawn or a new round starts. When your wizard is off-screen an edge arrow
 points to them; click it to jump back. The pill in the bottom-left corner shows the
 camera mode (click it to toggle the lock).
+
+## Graphics: 3D or 2D
+
+The game renders in **3D** by default (three.js): an angled overhead camera,
+animated wizard models tinted in each player's colour, a shader-driven lava sea,
+a stone platform with a real cliff edge that crumbles as it shrinks, particle
+fire, falling meteors, shockwaves, ward bubbles, bloom and ACES tone mapping. The
+server and the simulation are unchanged: the 2D world `(x, y)` is drawn on the 3D
+ground plane `(x, 0, y)`, and clicks are raycast onto that plane so movement and
+aiming land exactly under the cursor.
+
+The original **2D** canvas renderer is still there. Switch with
+*Esc → Graphics: 3D / 2D* (remembered in this browser). The game falls back to 2D
+automatically when WebGL isn't available. In 3D the renderer lowers its resolution
+(down to 1x), then turns bloom off, if the frame rate drops below about 55 fps.
 
 On touch screens: tap to move, tap a spell slot to cast it at the nearest enemy,
 drag with two fingers to pan and pinch to zoom.
@@ -65,4 +80,14 @@ The server listens on `$PORT` (default 3000).
 
 - `shared/game.js` – authoritative simulation and spell definitions (used by server and client HUD)
 - `server.js` – HTTP static server, rooms, WebSocket protocol, 30 Hz game loop
-- `public/` – canvas client (no framework, no bundler)
+- `public/` – browser client (no framework, no bundler)
+  - `client.js` – connection, HUD, input; `camera.js` – free camera (2D and tilted 3D projection)
+  - `render3d.js` – three.js renderer; `render.js` – 2D canvas renderer
+  - `vendor/three/` – vendored three.js **0.187.0** (MIT): `three.module.min.js` / `three.core.min.js`
+    (minified from the npm build with esbuild) plus the addons used (GLTFLoader, SkeletonUtils,
+    EffectComposer, RenderPass, UnrealBloomPass, OutputPass). Loaded through an import map in
+    `index.html`; nothing is fetched from a CDN.
+  - `models/mage.glb` – the wizard: the Mage from Kay Lousberg's
+    [KayKit Adventurers](https://kaylousberg.itch.io/kaykit-adventurers) pack (CC0), trimmed to the
+    animations the game uses. See `public/models/CREDITS.txt`.
+  - `sfx/` – sound samples, see `public/sfx/CREDITS.txt`
