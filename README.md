@@ -23,8 +23,19 @@ Fall off and you burn. It is an original game in the "knockback arena" genre.
 | `W` `E` `R` `D` `F` | Seeker Wisp, Shockwave, Meteor, Blink, Mirror Ward |
 | `S` | Stop |
 | `Shift`+key, `1`, `2`, or the **+** buttons | Spend an upgrade point |
+| Mouse at a screen edge, arrow keys | Pan the camera |
+| Middle-mouse drag | Grab and drag the camera |
+| Mouse wheel | Zoom toward the cursor |
+| `Space` (tap / hold) | Snap to / keep the camera on your wizard |
+| `Y` or double-tap `Space` | Toggle camera lock (follow your wizard) |
 
-On touch screens: tap to move, tap a spell slot to cast it at the nearest enemy.
+The camera is free by default (Warcraft III style) and jumps to your wizard when you
+join, respawn or a new round starts. When your wizard is off-screen an edge arrow
+points to them; click it to jump back. The pill in the bottom-left corner shows the
+camera mode (click it to toggle the lock).
+
+On touch screens: tap to move, tap a spell slot to cast it at the nearest enemy,
+drag with two fingers to pan and pinch to zoom.
 
 ## Run locally
 
