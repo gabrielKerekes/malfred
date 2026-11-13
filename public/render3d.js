@@ -17,7 +17,8 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { SPELLS, TICK, PLAYER_R } from '/shared/game.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { SPELLS, TICK, PLAYER_R, SKINS, PILLAR } from '/shared/game.js';
 import { cam, camPose, toScreen, FOV } from './camera.js';
 
 const TAU = Math.PI * 2;
@@ -512,6 +513,7 @@ void main() {
   rubble = new THREE.InstancedMesh(rockGeometry(11), patch(new THREE.MeshStandardMaterial({ color: 0x4a3a32, roughness: 1, flatShading: true }), 'rubble', `
     totalEmissiveRadiance += vec3(2.0, 0.45, 0.06) * smoothstep(-4.0, ${(LAVA_Y + 2).toFixed(1)}, vWp.y);`), rubbleData.length);
   scene.add(rubble);
+  buildObstacles(stone, bump);
 
   // glowing sigil engraved into the centre
   sigilMat = new THREE.MeshBasicMaterial({ map: canvasTex(sigilCanvas()), color: new THREE.Color(1.6, 0.45, 0.1), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
@@ -691,18 +693,37 @@ function split(clip, upper, name) {
   return new THREE.AnimationClip(name, clip.duration, tracks);
 }
 
-// Recolour the robe/hat swatches of the KayKit gradient atlas in the player's colour.
-function tintTex(hex) {
-  let t = texCache.get(hex);
+// Skins (shared/game.js): the robe keeps the player's colour; trim, staff crystal and headwear change.
+const SKIN = new Map(SKINS.map((s) => [s.id, s]));
+const skinOf = (id) => SKIN.get(id) || SKIN.get('classic') || SKINS[0];
+// Atlas swatches (8 x 4 grid of 32 x 64 vertical gradients, v = 0 at the top). Mage parts by swatch:
+// robe/sleeves 0,1; hat (and a strip at the back of the head) 1,1; cape 2,1; under-robe/trousers 7,1;
+// silver front panel, hem, cuffs, hat buckle 3,0 / 4,0; belt and hat band 5,0; staff crystal 6,2.
+// 6,1 and 7,0 are unused by the Mage: they carry the colours of the procedural headwear.
+const SW_ROBE = [1, 1], SW_DARK = [7, 1], SW_TRIM = [3, 0], SW_ACC = [6, 1], SW_ACC2 = [7, 0];
+// per hat: [ACC top -> bottom colours], [ACC2 top -> bottom]
+const ACC_COLS = {
+  horns: [['#ffc070', '#c8421a', '#3a1a12', '#140c0a'], ['#ff8a3a', '#5a1408']],
+  crown: [['#fff4c0', '#d9a830'], ['#ff6a7a', '#7a0618']],
+  antlers: [['#f4ead0', '#c9b08a', '#6b4a2a', '#3a2614'], ['#b8ff8a', '#2f6a28']],
+  hood: [['#888', '#222'], ['#888', '#222']],
+  pointed: [['#888', '#222'], ['#888', '#222']],
+};
+
+// Recolour the KayKit gradient atlas: robe/hat/cape in the player's colour, trim and crystal per skin.
+function tintTex(hex, skin) {
+  const key = hex + '|' + skin.id;
+  let t = texCache.get(key);
   if (t) return t;
   const S = 256, c = canvas(S, S), g = c.getContext('2d', { willReadFrequently: true });
   g.drawImage(atlas.image, 0, 0, S, S);
   const img = g.getImageData(0, 0, S, S), d = img.data;
-  const col = new THREE.Color(hex); // linear
-  const sr = col.clone().convertLinearToSRGB();
-  const base = [sr.r * 255, sr.g * 255, sr.b * 255];
-  // [col, row, brightness]: robe+arms, hat, cape, trim (8 x 4 swatch grid)
-  for (const [cx, cy, k] of [[0, 1, 1.0], [1, 1, 1.0], [2, 1, 0.62], [7, 1, 0.42]]) {
+  const rgb = (h) => { const sr = new THREE.Color(h).convertLinearToSRGB(); return [sr.r * 255, sr.g * 255, sr.b * 255]; };
+  const base = rgb(hex), trim = rgb(skin.trim), orb = rgb(skin.orb);
+  // [col, row, colour, brightness, lift]: lift adds a little grey sheen so near-black trims keep their shape
+  const regions = [[0, 1, base, 1.0, 0], [1, 1, base, 1.0, 0], [2, 1, base, 0.62, 0], [7, 1, base, 0.42, 0],
+    [3, 0, trim, 1.0, 34], [4, 0, trim, 0.9, 30], [5, 0, trim, 0.85, 26], [6, 2, orb, 1.1, 70]];
+  for (const [cx, cy, cl, k, lift] of regions) {
     const x0 = cx * 32, y0 = cy * 64;
     let top = 1;
     for (let y = y0; y < y0 + 64; y++) for (let x = x0; x < x0 + 32; x++) {
@@ -710,15 +731,162 @@ function tintTex(hex) {
     }
     for (let y = y0; y < y0 + 64; y++) for (let x = x0; x < x0 + 32; x++) {
       const i = (y * S + x) * 4, l = Math.pow((0.3 * d[i] + 0.59 * d[i + 1] + 0.11 * d[i + 2]) / top, 0.8) * k;
-      d[i] = Math.min(255, base[0] * l); d[i + 1] = Math.min(255, base[1] * l); d[i + 2] = Math.min(255, base[2] * l);
+      const sh = lift * l * l * l;
+      d[i] = Math.min(255, cl[0] * l + sh); d[i + 1] = Math.min(255, cl[1] * l + sh); d[i + 2] = Math.min(255, cl[2] * l + sh);
     }
   }
   g.putImageData(img, 0, 0);
+  // headwear swatches: plain vertical gradients
+  const [accA, accB] = ACC_COLS[skin.hat] || ACC_COLS.pointed;
+  for (const [[cx, cy], stops] of [[SW_ACC, accA], [SW_ACC2, accB]]) {
+    const gr = g.createLinearGradient(0, cy * 64, 0, cy * 64 + 64);
+    stops.forEach((s, i) => gr.addColorStop(i / (stops.length - 1), s));
+    g.fillStyle = gr; g.fillRect(cx * 32, cy * 64, 32, 64);
+  }
   t = new THREE.CanvasTexture(c);
   t.flipY = atlas.flipY; t.colorSpace = THREE.SRGBColorSpace;
   t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter;
-  texCache.set(hex, t);
+  texCache.set(key, t);
   return t;
+}
+
+// ---------------- procedural headwear (head-bone space, model units; +z = face, hair top ~0.96) ----------------
+// Each piece maps its UVs into an atlas swatch so it shares the wizard's material (hit flash, lava burn, ashes).
+function swatchUV(geo, sw, tOf) {
+  const p = geo.attributes.position, n = p.count, uv = new Float32Array(n * 2);
+  const u = (sw[0] * 32 + 12) / 256;
+  for (let i = 0; i < n; i++) { uv[i * 2] = u; uv[i * 2 + 1] = (sw[1] * 64 + 3 + clamp01(tOf(i, p)) * 58) / 256; }
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  return geo;
+}
+// tapered tube along a curve; radius(t) with t = 0 at the start, 1 at the end
+function taperTube(pts, segs, radial, radius) {
+  const curve = new THREE.CatmullRomCurve3(pts), fr = curve.computeFrenetFrames(segs, false);
+  const pos = [], nor = [], tt = [], idx = [], P = new THREE.Vector3(), N = new THREE.Vector3();
+  for (let i = 0; i <= segs; i++) {
+    const t = i / segs, r = radius(t);
+    curve.getPointAt(t, P);
+    for (let j = 0; j <= radial; j++) {
+      const a = (j / radial) * TAU, c = Math.cos(a), s = -Math.sin(a);
+      N.set(0, 0, 0).addScaledVector(fr.normals[i], c).addScaledVector(fr.binormals[i], s).normalize();
+      pos.push(P.x + N.x * r, P.y + N.y * r, P.z + N.z * r); nor.push(N.x, N.y, N.z); tt.push(t);
+    }
+  }
+  for (let i = 0; i < segs; i++) for (let j = 0; j < radial; j++) {
+    const a = i * (radial + 1) + j, b = a + radial + 1;
+    idx.push(a, b, a + 1, b, b + 1, a + 1);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nor, 3));
+  g.setIndex(idx);
+  g.userData.t = tt;
+  return g;
+}
+const mergeAll = (list) => mergeGeometries(list.map((g) => (g.index ? g.toNonIndexed() : g)));
+const hatGeoCache = new Map();
+function hatGeometry(hat) {
+  if (hatGeoCache.has(hat)) return hatGeoCache.get(hat);
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  const parts = [], tips = [];
+  const tubeUV = (g, sw, flip) => swatchUV(g, sw, (i) => (flip ? 1 - g.userData.t[i] : g.userData.t[i]));
+  if (hat === 'horns') {
+    for (const sx of [1, -1]) {
+      const pts = [V(0.3, 0.74, 0.04), V(0.56, 0.86, 0.02), V(0.8, 1.0, -0.06), V(0.92, 1.26, 0.0), V(0.84, 1.5, 0.14), V(0.7, 1.62, 0.24)]
+        .map((p) => p.setX(p.x * sx));
+      parts.push(tubeUV(taperTube(pts, 18, 9, (t) => 0.15 * (1 - t * 0.93) * (1 + 0.07 * Math.sin(t * 40))), SW_ACC, true));
+      tips.push(pts[pts.length - 1].clone());
+    }
+    // a dark iron circlet under the horns
+    const ring = new THREE.TorusGeometry(0.5, 0.045, 6, 28).rotateX(Math.PI / 2).rotateX(-0.22).translate(0, 0.64, 0.02);
+    parts.push(swatchUV(ring, SW_TRIM, () => 0.45));
+  } else if (hat === 'hood') {
+    // ellipsoidal cowl with the pole at the back-top (pulled into a drooping tip), open around the face
+    const f = V(0, -0.5, 1).normalize(), back = f.clone().negate(), OPEN = 1.2;
+    const e1 = V(1, 0, 0), e2 = new THREE.Vector3().crossVectors(back, e1).normalize();
+    const SC = V(0.6, 0.6, 0.68), C = V(0, 0.44, -0.08);
+    const shell = (k, inner) => {
+      const NP = 14, NT = 32, pos = [], idx = [], ts = [], dir = new THREE.Vector3();
+      for (let i = 0; i <= NP; i++) {
+        const ph = (i / NP) * (Math.PI - OPEN);
+        for (let j = 0; j <= NT; j++) {
+          const th = (j / NT) * TAU;
+          dir.copy(back).multiplyScalar(Math.cos(ph)).addScaledVector(e1, Math.sin(ph) * Math.cos(th)).addScaledVector(e2, Math.sin(ph) * Math.sin(th));
+          const tip = Math.pow(Math.cos(Math.min(ph, Math.PI / 2)), 10);
+          // cloth gathered toward the tip: radial folds that deepen down the back, and a little flare over the shoulders
+          const fold = 1 + 0.045 * Math.sin(th * 9) * smooth(0.15, 0.9, ph / (Math.PI - OPEN));
+          const flare = fold * (1 + 0.16 * smooth(0.1, 0.8, -dir.y) * smooth(-0.2, 0.5, -dir.z));
+          pos.push(C.x + dir.x * SC.x * k * flare, C.y + dir.y * SC.y * k + tip * 0.04, C.z + dir.z * SC.z * k * flare - tip * 0.3);
+          ts.push(i / NP);
+        }
+      }
+      for (let i = 0; i < NP; i++) for (let j = 0; j < NT; j++) {
+        const a = i * (NT + 1) + j, b = a + NT + 1;
+        if (inner) idx.push(a, a + 1, b, b, a + 1, b + 1); else idx.push(a, b, a + 1, b, b + 1, a + 1);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setIndex(idx); g.computeVertexNormals();
+      return swatchUV(g, inner ? SW_DARK : SW_ROBE, (i) => (inner ? 1 : 0.1 + ts[i] * 0.75));
+    };
+    // (a, b, a+1) winds outward: d/dphi x d/dtheta ~ e1 x e2 = back at the pole
+    parts.push(shell(1, false), shell(0.95, true));
+    // trim band around the opening
+    const rim = new THREE.TorusGeometry(Math.sin(OPEN), 0.07, 7, 40);
+    rim.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(V(0, 0, 1), f)).translate(f.x * Math.cos(OPEN), f.y * Math.cos(OPEN), f.z * Math.cos(OPEN));
+    rim.scale(SC.x, SC.y, SC.z).translate(C.x, C.y, C.z);
+    parts.push(swatchUV(rim, SW_TRIM, () => 0.25));
+  } else if (hat === 'crown') {
+    const N = 32, PTS = 8, r0 = 0.5, h = 0.13, ph = 0.17, y0 = 0.62, pos = [], idx = [], ts = [];
+    const peak = (j) => { const d = Math.abs(((j % (N / PTS)) / (N / PTS)) - 0.5) * 2; return 1 - d; }; // 0..1 per point
+    // rows: outer bottom, outer top, inner top, inner bottom
+    for (let row = 0; row < 4; row++) for (let j = 0; j <= N; j++) {
+      const a = (j / N) * TAU + Math.PI / PTS, top = row === 1 || row === 2;
+      const y = top ? y0 + h + ph * peak(j) : y0;
+      const r = (row < 2 ? 1 : 0.92) * r0 * (top ? 1.1 : 1);
+      pos.push(Math.sin(a) * r, y, Math.cos(a) * r); ts.push(top ? 0.05 : 0.8);
+    }
+    for (let row = 0; row < 3; row++) for (let j = 0; j < N; j++) {
+      const a = row * (N + 1) + j, b = a + N + 1;
+      idx.push(a, a + 1, b, b, a + 1, b + 1);
+    }
+    const band = new THREE.BufferGeometry();
+    band.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    band.setIndex(idx); band.computeVertexNormals();
+    parts.push(swatchUV(band, SW_TRIM, (i) => ts[i]));
+    // gems on every point, a big one at the front
+    for (let k = 0; k < PTS; k++) {
+      const a = (k / PTS) * TAU, r = r0 * 1.1;
+      const gem = new THREE.OctahedronGeometry(0.05, 0).scale(1, 1.4, 1).translate(Math.sin(a) * r, y0 + h + ph + 0.05, Math.cos(a) * r);
+      parts.push(swatchUV(gem, SW_ACC2, () => 0.3));
+    }
+    const front = new THREE.OctahedronGeometry(0.075, 0).scale(1, 1.3, 0.6).translate(0, y0 + h * 0.55, r0 * 1.04 + 0.02);
+    parts.push(swatchUV(front, SW_ACC2, () => 0.15));
+    tips.push(V(0, y0 + h * 0.55, r0 * 1.04 + 0.06));
+    for (const g of parts) g.rotateX(-0.14); // worn a little jauntily, tipped back
+    tips[0].applyAxisAngle(V(1, 0, 0), -0.14);
+  } else if (hat === 'antlers') {
+    for (const sx of [1, -1]) {
+      const beam = [V(0.26, 0.8, -0.02), V(0.44, 0.98, -0.08), V(0.66, 1.24, -0.14), V(0.8, 1.52, -0.08), V(0.78, 1.82, 0.06)].map((p) => p.setX(p.x * sx));
+      const curve = new THREE.CatmullRomCurve3(beam);
+      parts.push(tubeUV(taperTube(beam, 16, 7, (t) => 0.095 * (1 - t * 0.7)), SW_ACC, true));
+      tips.push(beam[beam.length - 1].clone());
+      for (const [at, dx, dy, dz, len] of [[0.3, 0.06, 0.34, 0.26, 1], [0.55, 0.3, 0.28, -0.02, 1], [0.78, -0.14, 0.26, 0.12, 0.85]]) {
+        const s = curve.getPointAt(at), e = V(s.x + dx * sx * len, s.y + dy * len, s.z + dz * len);
+        const m = s.clone().lerp(e, 0.5).add(V(0.03 * sx, 0.05, 0));
+        parts.push(tubeUV(taperTube([s, m, e], 8, 6, (t) => 0.058 * (1 - t * 0.7)), SW_ACC, true));
+      }
+      // two leaves at the base
+      for (const [lx, ly, lz, ry] of [[0.36, 0.84, 0.12, 0.6], [0.42, 0.8, -0.12, -0.5]]) {
+        const leaf = new THREE.OctahedronGeometry(0.1, 0).scale(0.55, 0.18, 1.25).rotateY(ry * sx).rotateZ(-0.5 * sx).translate(lx * sx, ly, lz);
+        parts.push(swatchUV(leaf, SW_ACC2, (i, p) => 0.5 - (p.getY(i) - ly) * 2));
+      }
+    }
+  }
+  const res = parts.length ? { geo: mergeAll(parts), tips } : null;
+  if (res) res.geo.computeBoundingSphere();
+  hatGeoCache.set(hat, res);
+  return res;
 }
 
 const WIZ_GLSL = `
@@ -726,21 +894,31 @@ const WIZ_GLSL = `
   float lavaL = smoothstep(uR - 120.0, uR + 20.0, rd) * (1.0 - smoothstep(${LAVA_Y.toFixed(1)}, 90.0, vWp.y));
   totalEmissiveRadiance += vec3(1.0, 0.3, 0.05) * lavaL * 0.9 * (0.3 + diffuseColor.rgb);`;
 
-function makeWizard(id, color) {
+function makeWizard(id, color, skin) {
   const root = SkeletonUtils.clone(gltf.scene);
   root.scale.setScalar(WIZ_S);
   root.position.y = -40;
   const tilt = new THREE.Group(); tilt.position.y = 40; tilt.add(root);
   const obj = new THREE.Group(); obj.add(tilt);
   const mat = patch(baseMat.clone(), 'wiz', WIZ_GLSL);
-  mat.map = tintTex(color);
+  mat.map = tintTex(color, skin);
   mat.emissive = new THREE.Color(0, 0, 0);
-  let staff = null;
+  let staff = null, hatNode = null;
   root.traverse((o) => {
     if (o.isMesh) { o.material = mat; o.castShadow = true; o.frustumCulled = false; }
     if (o.name === '2H_Staff') staff = o;
-    if (o.name === 'Mage_Hat') o.scale.multiply(tv1.set(0.72, 1, 0.72)); // narrower brim: the stock one hides the body from above
+    if (o.name === 'Mage_Hat') { hatNode = o; o.scale.multiply(tv1.set(0.72, 1, 0.72)); } // narrower brim: the stock one hides the body from above
   });
+  // headwear: the stock pointed hat, or a procedural piece on the head bone in its place
+  const hatTips = [];
+  const hw = skin.hat !== 'pointed' && hatNode && hatNode.parent ? hatGeometry(skin.hat) : null;
+  if (hw) {
+    hatNode.visible = false;
+    const acc = new THREE.Mesh(hw.geo, mat);
+    acc.castShadow = true; acc.frustumCulled = false;
+    hatNode.parent.add(acc);
+    for (const p of hw.tips) { const o = new THREE.Object3D(); o.position.copy(p); hatNode.parent.add(o); hatTips.push(o); }
+  }
   const tip = new THREE.Object3D(); tip.position.set(0, 1.2, 0);
   (staff || root).add(tip);
   const ward = new THREE.Mesh(wardGeo, wardMat);
@@ -759,7 +937,8 @@ function makeWizard(id, color) {
   A.knock.time = 0.16; A.knock.timeScale = 0;
   A.tumble.timeScale = 1.6;
   return {
-    id, color, obj, tilt, root, mat, tip, ward, mixer, A, glow: new THREE.Color(color).multiplyScalar(3),
+    id, color, skin: skin.id, hat: skin.hat, hatTips, obj, tilt, root, mat, tip, ward, mixer, A,
+    glow: new THREE.Color(color).multiplyScalar(3), orb: new THREE.Color(skin.orb).multiplyScalar(3),
     x: 0, y: 0, vx: 0, vy: 0, h: 0, yaw: 0, hp: 0, alive: false, lava: false, face: 0,
     castT: 9, castAng: 0, hitT: 9, flash: 0, spin: 0, dying: null, cheer: 0,
   };
@@ -786,9 +965,10 @@ function updateWizards(players, roster, myId, dt, now, phase, winner) {
   if (!gltf) return;
   for (const p of players) {
     const info = roster.get(p.id) || { color: '#cccccc' };
+    const skin = skinOf(info.skin);
     let w = wiz.get(p.id);
-    if (w && w.color !== info.color) { disposeWizard(w); wiz.delete(p.id); w = null; }
-    if (!w) { w = makeWizard(p.id, info.color); wiz.set(p.id, w); w.obj.visible = false; }
+    if (w && (w.color !== info.color || w.skin !== skin.id)) { disposeWizard(w); wiz.delete(p.id); w = null; }
+    if (!w) { w = makeWizard(p.id, info.color, skin); wiz.set(p.id, w); w.obj.visible = false; }
     w.seen = now;
     if (w.alive && !p.alive) startDeath(w);
     if (!w.alive && p.alive) respawn(w, p);
@@ -882,11 +1062,18 @@ function updateLiving(w, p, dt, now, isMe, cheering) {
   w.ward.visible = !!p.ward;
   if (p.ward) { const s = 40 + Math.sin(now / 90) * 1.2; w.ward.scale.set(s, s, s); }
 
-  // staff tip glow in the player's colour (flares while casting)
+  // staff tip glow in the skin's orb colour (flares while casting)
   w.tip.getWorldPosition(tipV);
-  const fl = 1 + castW * 2.5, g = w.glow;
+  const fl = 1 + castW * 2.5, g = w.orb;
   glows.add(tipV.x, tipV.y, tipV.z, 16 + 3 * Math.sin(now / 110 + p.id) + castW * 20, g.r * fl, g.g * fl, g.b * fl, 0.85);
   glows.add(tipV.x, tipV.y, tipV.z, 5 + castW * 6, 3, 3, 3, 1);
+  // headwear glints: ember horn tips, the crown's front gem, motes on the antler tips
+  for (let k = 0; k < w.hatTips.length; k++) {
+    w.hatTips[k].getWorldPosition(tipV);
+    const pu = 0.75 + 0.25 * Math.sin(now / (w.hat === 'antlers' ? 240 : 130) + k * 2.1 + p.id);
+    const sz = w.hat === 'crown' ? 7 : w.hat === 'horns' ? 8 : 6;
+    glows.add(tipV.x, tipV.y, tipV.z, sz * pu, g.r * 0.6 * pu, g.g * 0.6 * pu, g.b * 0.6 * pu, 0.8);
+  }
 
   if (p.lava) {
     if (Math.random() < 0.9) fx.spawn(p.x + rand(-13, 13), LAVA_Y + rand(0, 20), p.y + rand(-13, 13), rand(-15, 15), rand(40, 90), rand(-15, 15), rand(0.35, 0.7), rand(12, 20), K_FLAME, 0, 0, 0, 0.95);
@@ -1060,6 +1247,315 @@ function updateZones(a, b, f, dt, now) {
   for (const zp of zonePool) if (!zp.seen && zp.decal.visible) { zp.decal.visible = zp.rock.visible = false; zp.id = -1; }
 }
 
+// ---------------- terrain: pillars and rocks ----------------
+// Shared geometry (a few seeded variants) and materials, scaled per obstacle; nothing per obstacle to dispose.
+const OBS_GLSL = `
+  float rd = length(vWp.xz);
+  float heat = smoothstep(uR - 70.0, uR + 2.0, rd) * (1.0 - smoothstep(0.0, 70.0, vWp.y));
+  totalEmissiveRadiance += vec3(1.0, 0.28, 0.04) * heat * (0.22 + 0.05 * sin(uTime * 3.0 + rd * 0.1)) * (0.3 + diffuseColor.rgb);
+  totalEmissiveRadiance += vec3(1.0, 0.3, 0.06) * (1.0 - smoothstep(0.0, 45.0, vWp.y)) * 0.1 * (0.4 + diffuseColor.rgb);
+  float sunk = 1.0 - smoothstep(${(LAVA_Y - 4).toFixed(1)}, -1.0, vWp.y);
+  totalEmissiveRadiance += vec3(2.2, 0.55, 0.08) * sunk;`;
+const AO_FRAG = /* glsl */`
+uniform float uA; uniform float uR; varying vec2 vUv; varying vec3 vWp;
+void main() {
+  if (length(vWp.xz) > uR + 1.0) discard;
+  float r = length(vUv);
+  float a = (1.0 - smoothstep(0.3, 1.0, r)) * uA;
+  gl_FragColor = vec4(0.025, 0.012, 0.008, a);
+}`;
+const PILLAR_VARIANTS = 4, ROCK_VARIANTS = 4;
+const pillarGeos = [], rockGeos = [];
+let obsStoneMat, obsRockMat, runeMat, runeGeo, aoMat, pebbles;
+const obs = new Map();      // id -> obstacle
+const crumbled = new Set(); // ids already toppled by a 'crumble' event (may linger a frame in snapshots)
+let obsStamp = 0, obsInstant = true, pebDirty = false;
+
+function runeCanvas() {
+  const c = canvas(512, 64), g = c.getContext('2d'), R = seeded(77);
+  g.strokeStyle = '#fff'; g.lineCap = 'round'; g.lineJoin = 'round';
+  g.shadowColor = '#fff'; g.shadowBlur = 6;
+  g.lineWidth = 2; g.globalAlpha = 0.55;
+  g.beginPath(); g.moveTo(0, 8); g.lineTo(512, 8); g.moveTo(0, 56); g.lineTo(512, 56); g.stroke();
+  g.globalAlpha = 1; g.lineWidth = 3.2;
+  for (let k = 0; k < 16; k++) { // one glyph per cell: a stem plus a few strokes
+    const x = k * 32 + 16;
+    g.beginPath();
+    g.moveTo(x + (R() - 0.5) * 6, 16); g.lineTo(x + (R() - 0.5) * 6, 48);
+    for (let s = 0, n = 2 + Math.floor(R() * 2); s < n; s++) {
+      const y = 18 + R() * 28;
+      g.moveTo(x, y); g.lineTo(x + (R() < 0.5 ? -1 : 1) * (5 + R() * 6), y + (R() - 0.5) * 16);
+    }
+    g.stroke();
+  }
+  return c;
+}
+
+// a weathered, fluted column of radius 1 and height 1 (y 0..1), with a plinth; intact capital or broken top
+function pillarGeometry(seed) {
+  const R = seeded(seed), broken = seed % 2 === 1;
+  const NS = 24, NH = 12, y0 = 0.1, yTop = broken ? 0.84 : 0.92, lean = (R() - 0.5) * 0.05;
+  const dents = []; // chipped spots
+  for (let i = 0; i < 6; i++) dents.push([R() * TAU, y0 + R() * (yTop - y0), 0.25 + R() * 0.3, 0.05 + R() * 0.06]);
+  const jag = []; for (let i = 0; i < 5; i++) jag.push([R() * TAU, R() * 0.6 + 0.4]);
+  const topAt = (a) => {
+    if (!broken) return yTop;
+    let h = 0; for (const [p, w] of jag) h += w * Math.cos(a * 2 + p * 3) * 0.5 + 0.2 * Math.sin(a * 5 + p);
+    return yTop + 0.05 + 0.13 * h / jag.length;
+  };
+  const pos = [], uv = [], idx = [];
+  const noise = new Map();
+  for (let i = 0; i <= NH; i++) for (let j = 0; j <= NS; j++) {
+    const a = (j / NS) * TAU, top = i === NH;
+    const y = top ? topAt(a) : y0 + (yTop - y0) * (i / NH);
+    const q = (y - y0) / (yTop - y0);
+    const key = `${i},${j % NS}`; // same jitter on both sides of the seam
+    if (!noise.has(key)) noise.set(key, (R() - 0.5) * 0.06);
+    let r = (1 - 0.1 * q) * (1 - 0.05 * (0.5 + 0.5 * Math.cos(a * 12))) + noise.get(key);
+    for (const [da, dy, w, depth] of dents) {
+      const d = Math.hypot(angDiff(a, da) * 0.8, (y - dy) * 2.2);
+      if (d < w) r -= depth * (1 - d / w);
+    }
+    if (i === 0) r *= 1.04;
+    pos.push(Math.cos(a) * r + lean * q, y, Math.sin(a) * r);
+    uv.push((j / NS) * 0.8, y * 0.55);
+  }
+  for (let i = 0; i < NH; i++) for (let j = 0; j < NS; j++) {
+    const a = i * (NS + 1) + j, b = a + NS + 1;
+    idx.push(a, b, a + 1, b, b + 1, a + 1);
+  }
+  // top cap: fan to a centre point (sunken on a broken column)
+  const c0 = pos.length / 3;
+  pos.push(lean, broken ? yTop + 0.02 : yTop, 0); uv.push(0.4, 0.2);
+  const tr = NH * (NS + 1);
+  for (let j = 0; j < NS; j++) {
+    const a = tr + j;
+    pos.push(pos[a * 3], pos[a * 3 + 1], pos[a * 3 + 2]); uv.push(0.4 + pos[a * 3] * 0.15, 0.2 + pos[a * 3 + 2] * 0.15);
+  }
+  for (let j = 0; j < NS; j++) idx.push(c0, c0 + 1 + ((j + 1) % NS), c0 + 1 + j);
+  const shaft = new THREE.BufferGeometry();
+  shaft.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  shaft.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  shaft.setIndex(idx); shaft.computeVertexNormals();
+  const parts = [shaft];
+  const ring = (rt, rb, h, y, n, rot) => parts.push(new THREE.CylinderGeometry(rt, rb, h, n, 1).rotateY(rot).translate(0, y + h / 2, 0));
+  ring(1.3, 1.42, 0.055, 0, 8, Math.PI / 8);          // plinth
+  ring(1.12, 1.22, 0.05, 0.055, 8, R() * 0.4);         // step
+  ring(1.06, 1.1, 0.025, y0 - 0.005, 24, 0);           // base moulding
+  if (!broken) {
+    ring(0.98, 0.9, 0.03, yTop - 0.005, 24, 0);        // collar
+    parts.push(new THREE.BoxGeometry(2.1, 0.06, 2.1).rotateY(R() * 0.3).translate(lean, yTop + 0.055, 0)); // abacus
+  }
+  const g = mergeAll(parts);
+  g.computeBoundingSphere();
+  return g;
+}
+
+function buildObstacles(stone, bump) {
+  for (let i = 0; i < PILLAR_VARIANTS; i++) pillarGeos.push(pillarGeometry(101 + i));
+  for (let i = 0; i < ROCK_VARIANTS; i++) rockGeos.push(rockGeometry(201 + i * 7, 1));
+  obsStoneMat = patch(new THREE.MeshStandardMaterial({ map: stone, bumpMap: bump, bumpScale: 2.5, color: 0xfff0dc, roughness: 0.88, metalness: 0 }), 'obs', OBS_GLSL);
+  obsRockMat = patch(new THREE.MeshStandardMaterial({ map: stone, bumpMap: bump, bumpScale: 3, color: 0xd8c2ae, roughness: 0.92, metalness: 0, flatShading: true }), 'obsRock', OBS_GLSL);
+  const rt = canvasTex(runeCanvas());
+  rt.wrapS = THREE.RepeatWrapping;
+  runeMat = new THREE.MeshBasicMaterial({ map: rt, color: new THREE.Color(2, 0.55, 0.12), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+  runeGeo = new THREE.CylinderGeometry(1, 1, 1, 32, 1, true);
+  const ru = runeGeo.attributes.uv; for (let i = 0; i < ru.count; i++) ru.setX(i, ru.getX(i) * 3);
+  aoMat = decalMat(AO_FRAG, { uA: { value: 0.6 } }, THREE.NormalBlending);
+  aoMat.uniforms.uDrape.value = 0;
+  pebbles = new THREE.InstancedMesh(rockGeometry(13), rubble.material, 200);
+  pebbles.count = 0; pebbles.castShadow = true; pebbles.receiveShadow = true; pebbles.frustumCulled = false;
+  scene.add(pebbles);
+}
+
+function makeObstacle(q) {
+  const [id, kind, x, y, r] = q, R = seeded(id * 7919 + 13), pillar = kind === PILLAR;
+  const pivot = new THREE.Group(); pivot.position.set(x, 0, y);
+  let mesh, H;
+  if (pillar) {
+    H = 112 + R() * 38;
+    mesh = new THREE.Mesh(pillarGeos[Math.floor(R() * PILLAR_VARIANTS)], obsStoneMat);
+    mesh.scale.set(r, H, r);
+    if (R() < 0.75) { // glowing rune band
+      const band = new THREE.Mesh(runeGeo, runeMat);
+      band.position.y = 0.3 + R() * 0.25; band.scale.set(1.05, 0.085, 1.05); band.renderOrder = 3;
+      mesh.add(band);
+    }
+  } else {
+    H = r * 0.9;
+    mesh = new THREE.Mesh(rockGeos[Math.floor(R() * ROCK_VARIANTS)], obsRockMat);
+    mesh.scale.set(r * 1.05, r * (0.8 + R() * 0.25), r * 1.05);
+    mesh.position.y = r * 0.12;
+    mesh.rotation.set((R() - 0.5) * 0.3, 0, (R() - 0.5) * 0.3);
+  }
+  mesh.rotation.y = R() * TAU;
+  mesh.castShadow = mesh.receiveShadow = true;
+  pivot.add(mesh);
+  const ao = new THREE.Mesh(decalGeo, aoMat);
+  ao.renderOrder = 1; ao.position.set(x, 0.35, y);
+  const aoS = r * (pillar ? 1.75 : 1.55);
+  ao.scale.set(aoS, 1, aoS);
+  scene.add(pivot, ao);
+  const peb = [];
+  for (let k = 0, n = pillar ? 4 + Math.floor(R() * 4) : 2 + Math.floor(R() * 2); k < n; k++) {
+    const a = R() * TAU, d = r * (pillar ? 1.35 : 1.05) + R() * r * 0.5;
+    peb.push([x + Math.cos(a) * d, y + Math.sin(a) * d, (pillar ? 3 : 2) + R() * (pillar ? 5 : 3), R() * 6, R() * 6]);
+  }
+  return { id, kind, x, y, r, H, pivot, mesh, ao, aoS, peb, state: 'idle', t: 0, seen: 0, dx: 0, dz: 0, py: 0, vy: 0, ang: 0, slide: 0, splashed: false };
+}
+function removeObstacle(o) { scene.remove(o.pivot, o.ao); obs.delete(o.id); pebDirty = true; }
+function clearObstacles() {
+  for (const o of [...obs.values()]) removeObstacle(o);
+  crumbled.clear(); obsInstant = true;
+  if (pebbles) { pebbles.count = 0; }
+}
+
+function dust(x, y, r, n, up = 1) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * TAU, d = r * rand(0.7, 1.2), v = rand(40, 110);
+    smoke.spawn(x + Math.cos(a) * d, rand(2, 14) * up, y + Math.sin(a) * d, Math.cos(a) * v, rand(10, 45) * up, Math.sin(a) * v, rand(0.7, 1.3), rand(22, 40), K_SMOKE, 0.34, 0.29, 0.25, 0.93);
+  }
+}
+function lavaSplash(x, y, s) {
+  ring(x, y, 10 * s, 70 * s, 0.6, 4, 1.2, 0.2, 0.2, LAVA_Y + 0.6);
+  ring(x, y, 6 * s, 40 * s, 0.9, 2.5, 0.7, 0.12, 0.3, LAVA_Y + 0.5);
+  fx.burst(x, LAVA_Y + 4, y, Math.round(26 * s), 300 * s, 0.7, 5, K_SPARK, 4, 1.5, 0.3, 0.95, 2.4, 600);
+  for (let i = 0; i < 22 * s; i++) {
+    const a = Math.random() * TAU, v = rand(30, 120) * s;
+    fx.spawn(x + Math.cos(a) * 14 * s, LAVA_Y + rand(0, 14), y + Math.sin(a) * 14 * s, Math.cos(a) * v, rand(80, 260) * s, Math.sin(a) * v, rand(0.45, 0.85), rand(22, 40) * s, K_FLAME, 0, 0, 0, 0.93);
+  }
+  for (let i = 0; i < 10 * s; i++) smoke.spawn(x + rand(-20, 20) * s, LAVA_Y + rand(20, 50), y + rand(-20, 20) * s, rand(-25, 25), rand(40, 90), rand(-25, 25), rand(1.3, 2.1), rand(36, 60) * s, K_SMOKE, 0.1, 0.08, 0.07, 0.95);
+  lightFlash(x, LAVA_Y + 40, y, 1, 0.45, 0.1, 5 * s, 0.5);
+}
+
+// the platform let go of this one: topple outward over the rim into the lava
+function startFall(o) {
+  const d = Math.hypot(o.x, o.y) || 1;
+  o.dx = o.x / d; o.dz = o.y / d;
+  o.state = 'fall'; o.t = 0; o.py = 0; o.vy = 0; o.ang = 0; o.slide = 0; o.splashed = false;
+  const off = o.kind === PILLAR ? o.r * 0.75 : 0; // pillars tip over their outer base edge
+  o.pivot.position.set(o.x + o.dx * off, 0, o.y + o.dz * off);
+  o.mesh.position.x = -o.dx * off; o.mesh.position.z = -o.dz * off;
+  pebDirty = true;
+  // crack, dust and stone chips
+  dust(o.x, o.y, o.r, o.kind === PILLAR ? 14 : 8);
+  addDebris(o.x, o.y, o.kind === PILLAR ? 14 : 8, o.r * 4);
+  ring(o.x, o.y, o.r * 0.8, o.r * 2.4, 0.5, 2.2, 0.6, 0.12, 0.2);
+  addShake(0.15 * Math.max(0, 1 - Math.hypot(o.x - cam.x, o.y - cam.y) / 700));
+}
+function crumbleAt(x, y, r, kind) {
+  let best = null, bd = 6 + r * 0.3;
+  for (const o of obs.values()) {
+    if (o.state === 'fall') continue;
+    const dd = Math.hypot(o.x - x, o.y - y);
+    if (dd < bd) { bd = dd; best = o; }
+  }
+  if (best) {
+    if (best.state === 'sink') best.pivot.position.y = 0;
+    crumbled.add(best.id); startFall(best);
+  } else { // never saw it (or already gone): just the splash where it went in
+    const d = Math.hypot(x, y) || 1;
+    dust(x, y, r, 6);
+    lavaSplash(x + (x / d) * r * (kind === PILLAR ? 3 : 1.5), y + (y / d) * r * (kind === PILLAR ? 3 : 1.5), kind === PILLAR ? 1.3 : 0.8);
+  }
+}
+
+const obsQ = new THREE.Quaternion(), obsAxis = new THREE.Vector3();
+function updateObstacles(list, dt, now) {
+  obsStamp++;
+  for (const q of list) {
+    if (crumbled.has(q[0])) continue;
+    let o = obs.get(q[0]);
+    if (o && (o.kind !== q[1] || o.x !== q[2] || o.y !== q[3] || o.r !== q[4])) { removeObstacle(o); o = null; } // id reused by another match
+    if (!o) {
+      o = makeObstacle(q); obs.set(o.id, o); pebDirty = true;
+      if (!obsInstant) { // rises out of the stone
+        o.state = 'rise'; o.t = 0;
+        dust(o.x, o.y, o.r, o.kind === PILLAR ? 10 : 5);
+        ring(o.x, o.y, o.r * 0.6, o.r * 2, 0.45, 1.6, 0.5, 0.1, 0.2);
+      }
+    }
+    o.seen = obsStamp;
+  }
+  // forget crumbled ids once the snapshots stop listing them
+  if (crumbled.size) for (const id of crumbled) if (!list.some((q) => q[0] === id)) crumbled.delete(id);
+  if (list.length) obsInstant = false;
+  const R = U.uR.value;
+  for (const o of obs.values()) { // (deleting the current entry mid-iteration is safe for a Map)
+    if (o.seen !== obsStamp && (o.state === 'idle' || o.state === 'rise')) { // removed (new layout): sink into the floor
+      o.state = 'sink'; o.t = 0; pebDirty = true;
+      dust(o.x, o.y, o.r, o.kind === PILLAR ? 8 : 4);
+    }
+    if (o.state === 'idle') continue;
+    o.t += dt;
+    if (o.state === 'rise') {
+      const q = clamp01(o.t / 0.6), e = 1 - Math.pow(1 - q, 3);
+      o.pivot.position.y = -o.H * 1.05 * (1 - e);
+      o.ao.scale.set(o.aoS * e, 1, o.aoS * e);
+      if (Math.random() < 0.5 * (1 - q)) dust(o.x, o.y, o.r, 1);
+      if (q >= 1) { o.state = 'idle'; o.pivot.position.y = 0; }
+    } else if (o.state === 'sink') {
+      const q = clamp01(o.t / 0.5);
+      o.pivot.position.y = -o.H * 1.05 * q * q;
+      o.ao.scale.set(o.aoS * (1 - q), 1, o.aoS * (1 - q));
+      if (Math.random() < 0.6) dust(o.x, o.y, o.r, 1);
+      if (q >= 1) removeObstacle(o);
+    } else if (o.state === 'fall') {
+      const pillar = o.kind === PILLAR, t = o.t;
+      // lava is thick: once in, things only drift and sink slowly
+      const inLava = o.py < LAVA_Y + (pillar ? 0 : o.r * 0.3), drag = inLava ? 0.2 : 1;
+      if (pillar) {
+        o.ang = Math.min(1.62, 0.06 + 1.9 * t * t);
+        o.slide += (20 + 50 * Math.min(t, 1)) * drag * dt;
+        if (t > 0.3) o.vy -= 520 * dt;
+      } else {
+        o.ang += dt * (2.5 + 5 * Math.min(t, 1)) * drag;
+        o.slide += (50 + 160 * Math.min(t, 1)) * drag * dt;
+        if (Math.hypot(o.x, o.y) + o.slide > R + o.r * 0.2) o.vy -= 900 * dt;
+      }
+      if (inLava) o.vy = Math.max(o.vy, pillar ? -32 : -45);
+      o.py += o.vy * dt;
+      const px = o.pivot.position.x, pz = o.pivot.position.z;
+      o.pivot.position.set(o.x + o.dx * ((pillar ? o.r * 0.75 : 0) + o.slide), o.py, o.y + o.dz * ((pillar ? o.r * 0.75 : 0) + o.slide));
+      obsAxis.set(o.dz, 0, -o.dx);
+      o.pivot.quaternion.copy(obsQ.setFromAxisAngle(obsAxis, o.ang));
+      const k = clamp01(1 - t * 2.5);
+      o.ao.scale.set(o.aoS * k, 1, o.aoS * k);
+      // where the column meets the lava: splash on impact, then it burns as it goes under
+      const reach = pillar ? o.H * 0.8 * Math.sin(o.ang) : 0;
+      const sx = o.pivot.position.x + o.dx * reach, sz = o.pivot.position.z + o.dz * reach;
+      if (!o.splashed && (pillar ? o.ang > 1.25 : inLava)) {
+        o.splashed = true;
+        lavaSplash(sx, sz, pillar ? 1.4 : 0.9);
+        addShake(0.25 * Math.max(0, 1 - Math.hypot(sx - cam.x, sz - cam.y) / 800));
+      }
+      if (o.splashed) {
+        for (let k2 = 0; k2 < 2; k2++) {
+          const f = Math.random();
+          fx.spawn(lerp(px, sx, f) + rand(-o.r, o.r) * 0.6, LAVA_Y + rand(0, 10), lerp(pz, sz, f) + rand(-o.r, o.r) * 0.6, rand(-15, 15), rand(50, 120), rand(-15, 15), rand(0.35, 0.7), rand(16, 28), K_FLAME, 0, 0, 0, 0.95);
+        }
+        if (Math.random() < 0.25) smoke.spawn(lerp(px, sx, Math.random()), LAVA_Y + 30, lerp(pz, sz, Math.random()), rand(-10, 10), rand(30, 60), rand(-10, 10), rand(1, 1.6), rand(24, 40), K_SMOKE, 0.1, 0.08, 0.07, 0.97);
+      } else if (Math.random() < 0.4) dust(o.pivot.position.x, o.pivot.position.z, o.r * 0.5, 1);
+      if (o.py < LAVA_Y - o.r * 2.6 - 12 || t > 5) removeObstacle(o);
+    }
+  }
+  if (pebDirty) {
+    pebDirty = false;
+    let n = 0;
+    for (const o of obs.values()) {
+      if (o.state === 'fall' || o.state === 'sink') continue;
+      for (const [x, y, s, rx, ry] of o.peb) {
+        if (n >= 200) break;
+        tmpM.compose(tv1.set(x, s * 0.25, y), tq.setFromEuler(te.set(rx, ry, 0)), tv2.setScalar(s));
+        pebbles.setMatrixAt(n++, tmpM);
+      }
+    }
+    pebbles.count = n;
+    pebbles.instanceMatrix.needsUpdate = true;
+  }
+  runeMat.color.setRGB(2, 0.55, 0.12).multiplyScalar(0.8 + 0.2 * Math.sin(now / 420));
+}
+
 // ---------------- events ----------------
 let trauma = 0, shakeT = 0;
 const addShake = (v) => { trauma = Math.min(1, trauma + v); };
@@ -1148,7 +1644,7 @@ export function fxEvent(ev, env) {
     ring(c, d, 20, 80, 0.5, 4, 0.9, 0.2, 0.18, inLava ? LAVA_Y + 0.6 : 0.5);
     lightFlash(c, y0 + 40, d, 1, 0.4, 0.1, 6, 0.5);
     addShake(a === env.myId ? 0.5 : 0.2 * near(c, d, 600));
-  }
+  } else if (type === 'crumble') crumbleAt(a, b, c, d);
 }
 
 export function resetFx() {
@@ -1160,6 +1656,7 @@ export function resetFx() {
   for (const z of zonePool) { z.id = -1; z.decal.visible = z.rock.visible = false; }
   for (const w of wiz.values()) disposeWizard(w);
   wiz.clear(); proj.clear();
+  clearObstacles(); // rebuilt (without the rise animation) from the next snapshot
 }
 
 // ---------------- per-frame effect updates ----------------
@@ -1355,6 +1852,7 @@ export function render(state, ctx) {
   updateWizards(players, roster, myId, dt, now, b.ph, b.w);
   updateProjectiles(a, b, f, now, myId);
   updateZones(a, b, f, dt, now);
+  updateObstacles(b.O || [], dt, now);
   const p = camPose();
   updateFx(dt, Math.min(2200, p.d * 1.2));
   fx.update(dt); smoke.update(dt); glows.commit();
@@ -1452,6 +1950,7 @@ let adaptOn = true;
 export function setActive(on) {
   active = on;
   if (renderer) renderer.domElement.hidden = !on;
+  if (!on && ready) clearObstacles();
 }
 export const stats = () => ({ cpuMs: +cpuMs.toFixed(2), pixelRatio, bloom: !!bloom?.enabled, particles: fx ? fx.n + smoke.n : 0, ready, calls: renderer?.info.render.calls, tris: renderer?.info.render.triangles });
 

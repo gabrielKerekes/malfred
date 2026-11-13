@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { Game, TICK } from './shared/game.js';
+import { Game, TICK, SKIN_IDS } from './shared/game.js';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -47,14 +47,18 @@ function makeCode() {
   return c;
 }
 
+// mode: 'brawl' | 'rounds' | 'tutorial' (a private solo brawl against a training dummy)
 function createRoom(mode) {
-  const room = { code: makeCode(), mode, game: new Game(mode, { allSpells: DEV }), conns: new Map(), host: 0, bots: mode === 'rounds' ? 3 : 0 };
+  const tutorial = mode === 'tutorial';
+  const game = new Game(tutorial ? 'brawl' : mode, { allSpells: DEV, tutorial, terrain: 1 });
+  const room = { code: makeCode(), mode, game, conns: new Map(), host: 0, bots: mode === 'rounds' ? 3 : 0 };
   rooms.set(room.code, room);
-  syncBots(room);
+  if (tutorial) game.addDummy(); else syncBots(room);
   return room;
 }
 
 function syncBots(room) {
+  if (room.mode === 'tutorial') return;
   const g = room.game;
   const bots = [...g.players.values()].filter((p) => p.bot);
   const humans = g.players.size - bots.length;
@@ -68,7 +72,7 @@ function syncBots(room) {
 function send(ws, obj) { if (ws.readyState === 1) ws.send(JSON.stringify(obj)); }
 
 function sendRoster(room) {
-  const msg = JSON.stringify({ t: 'roster', host: room.host, bots: room.bots, list: room.game.roster() });
+  const msg = JSON.stringify({ t: 'roster', host: room.host, bots: room.bots, terrain: room.game.terrain, list: room.game.roster() });
   for (const ws of room.conns.keys()) if (ws.readyState === 1) ws.send(msg);
   room.game.dirty = false;
 }
@@ -80,6 +84,8 @@ function join(ws, m) {
     room = [...rooms.values()].find((r) => r.mode === 'brawl' && r.conns.size < BRAWL_MAX_HUMANS) || createRoom('brawl');
   } else if (m.mode === 'create') {
     room = createRoom('rounds');
+  } else if (m.mode === 'tutorial') {
+    room = createRoom('tutorial');
   } else {
     room = rooms.get(String(m.code || '').toUpperCase().trim());
     if (!room || room.mode !== 'rounds') return send(ws, { t: 'err', m: 'Room not found.' });
@@ -93,7 +99,7 @@ function join(ws, m) {
       if (b) g.removePlayer(b.id);
     }
   }
-  const p = room.game.addPlayer(name);
+  const p = room.game.addPlayer(name, false, typeof m.skin === 'string' ? m.skin : '');
   ws.room = room; ws.pid = p.id;
   room.conns.set(ws, p.id);
   if (!room.host) room.host = p.id;
@@ -134,6 +140,18 @@ function onMessage(ws, raw) {
         room.bots = Math.max(0, Math.min(ROOM_MAX - 1, m.n));
         syncBots(room);
         sendRoster(room);
+      }
+      break;
+    case 'terrain':
+      if (id === room.host && room.mode === 'rounds' && g.phase === 'lobby' && [0, 1, 2].includes(m.n)) {
+        g.terrain = m.n;
+        sendRoster(room);
+      }
+      break;
+    case 'skin':
+      if (typeof m.s === 'string' && SKIN_IDS.includes(m.s)) {
+        const p = g.players.get(id);
+        if (p) { p.skin = m.s; g.dirty = true; }
       }
       break;
   }

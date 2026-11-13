@@ -2,7 +2,7 @@
 // Anything expensive (textures, glows, wizard parts, name labels) is pre-rendered
 // once to offscreen canvases and blitted with drawImage every frame, so the hot
 // path allocates almost no gradients.
-import { SPELLS, TICK, PLAYER_R } from '/shared/game.js';
+import { SPELLS, TICK, PLAYER_R, SKINS, PILLAR, ROCK } from '/shared/game.js';
 
 const TAU = Math.PI * 2;
 const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -142,7 +142,7 @@ function nameLabel(name, isMe) {
 // colour, head shared) into one small canvas per wizard each frame. Composing per
 // wizard lets pose, walk cycle, tints and the death animation apply to the whole
 // figure at once. Coordinates: origin at the feet, +x = facing direction.
-const PSC = 3; // part supersampling
+const PSC = 4; // part supersampling (high enough for the menu skin preview too)
 function part(x0, y0, x1, y1, draw) {
   const w = x1 - x0, h = y1 - y0, c = makeCanvas(w * PSC, h * PSC), g = c.getContext('2d');
   g.scale(PSC, PSC); g.translate(-x0, -y0); g.lineJoin = 'round'; g.lineCap = 'round';
@@ -175,10 +175,178 @@ const headPart = part(-10, -10, 11, 17, (g) => {
 
 const SHOULDER_Y = -31;
 const kitCache = new Map();
-/** Per-colour robe, sleeves and hat. */
-function wizardKit(color) {
-  let k = kitCache.get(color);
+const SKIN_BY_ID = new Map(SKINS.map((s) => [s.id, s]));
+const skinOf = (id) => SKIN_BY_ID.get(id) || SKIN_BY_ID.get('classic') || SKINS[0];
+
+// ---- headwear, drawn in head-local coords (origin = head part origin, face toward +x) ----
+// Each returns { p: part, x, y, hideHead }: the part is drawn at head + (x, y), rotated by the hat tilt.
+
+/** Classic pointed hat with a band in the trim colour. */
+function hatPointed(base, deep, light, trim) {
+  const p = part(-17, -31, 16, 6, (g) => {
+    g.fillStyle = rgba(deep, 1); g.beginPath(); g.ellipse(0, 0, 14, 4.2, 0, 0, TAU); g.fill();
+    g.strokeStyle = 'rgba(0,0,0,0.6)'; g.lineWidth = 0.9; g.stroke();
+    g.beginPath(); g.moveTo(-7.5, -0.5); g.quadraticCurveTo(-4.5, -12, -3, -18); g.quadraticCurveTo(-6, -25.5, -14, -28);
+    g.quadraticCurveTo(-2.5, -24.5, 1.5, -17); g.quadraticCurveTo(5.5, -9, 7.5, -0.5); g.closePath();
+    const gr = g.createLinearGradient(-8, 0, 8, 0);
+    gr.addColorStop(0, rgba(deep, 1)); gr.addColorStop(0.55, rgba(base, 1)); gr.addColorStop(1, rgba(light, 1));
+    g.fillStyle = gr; g.fill(); g.strokeStyle = 'rgba(0,0,0,0.6)'; g.lineWidth = 0.9; g.stroke();
+    g.beginPath(); g.moveTo(-7.4, -1); g.quadraticCurveTo(0, 1.6, 7.4, -1); g.lineTo(6.9, -4.2);
+    g.quadraticCurveTo(0, -1.8, -6.6, -4.2); g.closePath(); g.fillStyle = trim; g.fill();
+    g.strokeStyle = 'rgba(60,30,0,0.5)'; g.lineWidth = 0.6; g.stroke();
+    // little star on the cone
+    g.fillStyle = '#ffeaa0'; g.beginPath();
+    for (let i = 0; i < 10; i++) { const a = (i / 10) * TAU - Math.PI / 2, r = i % 2 ? 0.9 : 2.2; g.lineTo(0.8 + Math.cos(a) * r, -10 + Math.sin(a) * r); }
+    g.fill();
+    g.strokeStyle = rgba(light, 0.9); g.lineWidth = 1.1; g.beginPath(); g.ellipse(0, 0, 14, 4.2, 0, 0.2, Math.PI - 0.2); g.stroke();
+  });
+  return { p, x: -0.5, y: -5, hideHead: false };
+}
+
+/** Two curved dark horns with glowing tips (no hat). */
+function hatHorns(orb) {
+  const oc = rgb(orb);
+  const horn = (g, ox, oy, s, k, far) => {
+    // s = +1 sweeps toward the back (-x), -1 toward the front; k = size
+    g.save(); g.translate(ox, oy); g.scale(-s * k, k);
+    g.beginPath(); g.moveTo(3.4, 0.6);
+    g.bezierCurveTo(7.4, -0.6, 11.2, -4.4, 10.2, -13.2);              // outer curve up to the tip
+    g.bezierCurveTo(8.8, -8, 5, -6.6, 1.6, -6.4);                      // inner curve back
+    g.bezierCurveTo(-1.4, -6.2, -3.4, -3, -3.4, 0.6); g.closePath();
+    const gr = g.createLinearGradient(0, 0, 10.2, -13.2);
+    gr.addColorStop(0, far ? '#1c120e' : '#33241c'); gr.addColorStop(0.5, far ? '#33251e' : '#5e4c40');
+    gr.addColorStop(0.78, rgba(mix([70, 46, 34], oc, 0.55), 1)); gr.addColorStop(1, rgba(mix(oc, [255, 255, 255], 0.4), 1));
+    g.fillStyle = gr; g.fill();
+    g.strokeStyle = 'rgba(0,0,0,0.8)'; g.lineWidth = 0.8 / k; g.stroke();
+    // ridges + a highlight along the outer curve
+    g.strokeStyle = 'rgba(0,0,0,0.35)'; g.lineWidth = 0.55 / k; g.beginPath();
+    for (const [x0, y0, x1, y1] of [[-1.6, -4.4, 2.6, -1.6], [2.4, -6.2, 5.6, -2.6], [5.4, -6.6, 8.2, -4.6]]) { g.moveTo(x0, y0); g.lineTo(x1, y1); }
+    g.stroke();
+    if (!far) {
+      g.strokeStyle = 'rgba(255,225,200,0.3)'; g.lineWidth = 0.7 / k;
+      g.beginPath(); g.moveTo(4.6, -0.6); g.bezierCurveTo(7.6, -1.8, 9.6, -5, 9.6, -10); g.stroke();
+    }
+    // glowing tip
+    const tg = g.createRadialGradient(10, -12.6, 0, 10, -12.6, 4.4);
+    tg.addColorStop(0, rgba(mix(oc, [255, 255, 255], 0.6), 0.95)); tg.addColorStop(0.4, rgba(oc, 0.55)); tg.addColorStop(1, rgba(oc, 0));
+    g.fillStyle = tg; g.fillRect(5.6, -17, 8.8, 8.8);
+    g.restore();
+  };
+  const p = part(-20, -24, 20, 4, (g) => {
+    horn(g, -2.4, -4.4, 1, 0.95, true);  // far horn, sweeping back
+    horn(g, 3, -5, -1, 1.1, false);       // near horn, sweeping forward
+  });
+  return { p, x: 0, y: 0, hideHead: false };
+}
+
+/** Cowl over the head: shadowed face with two eyes glowing in the orb colour. */
+function hatHood(base, deep, light, trim, orb) {
+  const oc = rgb(orb);
+  const p = part(-17, -15, 12, 15, (g) => {
+    g.beginPath(); g.moveTo(8.4, 11);
+    g.quadraticCurveTo(10.2, 2, 8, -5.5); g.quadraticCurveTo(4.6, -11.8, -2, -11.4);
+    g.quadraticCurveTo(-9.5, -10.4, -12.6, -3.4); g.quadraticCurveTo(-14.2, 0.5, -15.6, 4.4);
+    g.quadraticCurveTo(-11.4, 6, -10.2, 11.6); g.quadraticCurveTo(-1, 14.2, 8.4, 11); g.closePath();
+    const gr = g.createLinearGradient(-14, -6, 9, 4);
+    gr.addColorStop(0, rgba(deep, 1)); gr.addColorStop(0.6, rgba(base, 1)); gr.addColorStop(1, rgba(light, 1));
+    g.fillStyle = gr; g.fill();
+    g.strokeStyle = 'rgba(0,0,0,0.6)'; g.lineWidth = 0.9; g.stroke();
+    // folds
+    g.strokeStyle = 'rgba(0,0,0,0.28)'; g.lineWidth = 0.9; g.beginPath();
+    g.moveTo(-3, -10.6); g.quadraticCurveTo(-8, -4, -8.6, 9); g.moveTo(-11, -4); g.quadraticCurveTo(-11, 3, -12.4, 6.4); g.stroke();
+    // shadowed face opening
+    g.save(); g.translate(4.2, 1); g.rotate(0.12);
+    const fg = g.createRadialGradient(0.8, 0.5, 0.5, 0, 0, 6.4);
+    fg.addColorStop(0, '#070304'); fg.addColorStop(0.75, '#0d0708'); fg.addColorStop(1, '#2a1a16');
+    g.fillStyle = fg; g.beginPath(); g.ellipse(0, 0, 4.4, 6.2, 0, 0, TAU); g.fill();
+    g.strokeStyle = trim; g.lineWidth = 1.3; g.stroke();
+    g.strokeStyle = 'rgba(0,0,0,0.5)'; g.lineWidth = 0.5; g.beginPath(); g.ellipse(0, 0, 5.1, 6.9, 0, 0, TAU); g.stroke();
+    g.restore();
+    // eyes
+    for (const [x, y, r] of [[5.7, 0.1, 1], [3.1, 0.4, 0.8]]) {
+      const eg = g.createRadialGradient(x, y, 0, x, y, r * 3.4);
+      eg.addColorStop(0, rgba(oc, 0.9)); eg.addColorStop(1, rgba(oc, 0));
+      g.fillStyle = eg; g.fillRect(x - r * 3.4, y - r * 3.4, r * 6.8, r * 6.8);
+      g.fillStyle = rgba(mix(oc, [255, 255, 255], 0.65), 1);
+      g.beginPath(); g.ellipse(x, y, r * 1.15, r * 0.7, 0, 0, TAU); g.fill();
+    }
+  });
+  return { p, x: 0, y: 0, hideHead: true };
+}
+
+/** Gold crown with points and gems (central gem in the orb colour). */
+function hatCrown(orb) {
+  const p = part(-9, -16, 10, -1, (g) => {
+    const tips = [[7.4, -11.6], [4, -12.6], [0.6, -14], [-2.8, -12.6], [-6.2, -11.6]];
+    g.beginPath(); g.moveTo(-6.6, -4.2); g.quadraticCurveTo(0.6, -1.6, 7.8, -4.2); g.lineTo(7.6, -7);
+    for (let i = 0; i < tips.length; i++) {
+      const [x, y] = tips[i];
+      g.lineTo(x, y);
+      if (i < tips.length - 1) g.lineTo((x + tips[i + 1][0]) / 2, -7.6);
+    }
+    g.lineTo(-6.6, -7); g.closePath();
+    const gr = g.createLinearGradient(-6, 0, 8, 0);
+    gr.addColorStop(0, '#8a5a12'); gr.addColorStop(0.5, '#e4b54f'); gr.addColorStop(0.8, '#fff0a8'); gr.addColorStop(1, '#c08a2a');
+    g.fillStyle = gr; g.fill();
+    g.strokeStyle = '#4a2c06'; g.lineWidth = 0.8; g.stroke();
+    // band
+    g.strokeStyle = 'rgba(255,245,200,0.7)'; g.lineWidth = 0.7;
+    g.beginPath(); g.moveTo(-6.4, -6.2); g.quadraticCurveTo(0.6, -3.8, 7.6, -6.2); g.stroke();
+    // tip pearls
+    g.fillStyle = '#fff6cc';
+    for (const [x, y] of tips) { g.beginPath(); g.arc(x, y, 0.85, 0, TAU); g.fill(); }
+    // gems
+    for (const [x, y, r, col] of [[-3, -4.6, 1.1, '#d22a3a'], [4.4, -4.6, 1.1, '#2f5cff'], [0.7, -4.3, 1.5, orb]]) {
+      g.fillStyle = col; g.beginPath(); g.arc(x, y, r, 0, TAU); g.fill();
+      g.strokeStyle = 'rgba(40,20,0,0.7)'; g.lineWidth = 0.45; g.stroke();
+      g.fillStyle = 'rgba(255,255,255,0.75)'; g.beginPath(); g.arc(x + r * 0.3, y - r * 0.35, r * 0.35, 0, TAU); g.fill();
+    }
+  });
+  return { p, x: 0, y: 0, hideHead: false };
+}
+
+/** Branching antlers with a few leaves at the roots. */
+function hatAntlers() {
+  const antler = (g, ox, oy, s, k, far) => {
+    g.save(); g.translate(ox, oy); g.scale(-s * k, k);
+    const paths = [
+      [0, 0, 1.5, -8, 6, -14, 7.5, -22],          // main beam
+      [2.4, -8, 0, -11, -1.6, -15, -1.2, -17],    // brow tine
+      [5.4, -13, 8.5, -14.5, 11, -15, 13, -18],   // rear tine
+      [6.6, -17.5, 4.5, -19, 3.6, -21, 3.8, -24], // top tines
+      [7.3, -20, 9, -21, 10, -22.5, 10.4, -25],
+    ];
+    const stroke = (col, w) => {
+      g.strokeStyle = col; g.lineWidth = w / k;
+      for (const [x0, y0, c1x, c1y, c2x, c2y, x1, y1] of paths) {
+        g.beginPath(); g.moveTo(x0, y0); g.bezierCurveTo(c1x, c1y, c2x, c2y, x1, y1); g.stroke();
+      }
+    };
+    stroke('#2a180c', 3.4);
+    stroke(far ? '#9c8461' : '#e0cca2', 2);
+    if (!far) stroke('rgba(255,250,235,0.5)', 0.7);
+    g.restore();
+  };
+  const p = part(-20, -32, 20, 2, (g) => {
+    antler(g, -3, -4.6, 1, 0.92, true);
+    antler(g, 2.6, -5.2, -1, 1, false);
+    for (const [x, y, a, col] of [[-1.6, -6, -0.6, '#4f9a34'], [1.6, -6.6, 0.5, '#6fc24a'], [0.2, -6.2, -0.1, '#8fdc5e']]) {
+      g.save(); g.translate(x, y); g.rotate(a);
+      g.fillStyle = col; g.beginPath(); g.ellipse(0, -1.6, 1.3, 2.6, 0, 0, TAU); g.fill();
+      g.strokeStyle = 'rgba(20,50,10,0.7)'; g.lineWidth = 0.4; g.stroke();
+      g.restore();
+    }
+  });
+  return { p, x: 0, y: 0, hideHead: false };
+}
+
+/** Robe, sleeves, headwear and orb colour per (robe colour, skin). */
+function wizardKit(color, skinId) {
+  const skin = skinOf(skinId);
+  const key = color + '|' + skin.id;
+  let k = kitCache.get(key);
   if (k) return k;
+  const trim = skin.trim;
   const base = rgb(color), dark = mix(base, [20, 8, 4], 0.5), deep = mix(base, [10, 4, 2], 0.68), light = mix(base, [255, 250, 240], 0.35);
   const robe = part(-17, -5, 17, 33, (g) => {
     const body = () => {
@@ -192,16 +360,21 @@ function wizardKit(color) {
     g.strokeStyle = 'rgba(0,0,0,0.25)'; g.lineWidth = 1;
     g.beginPath(); g.moveTo(-4, 13); g.quadraticCurveTo(-6, 21, -7.5, 29); g.moveTo(1, 14); g.quadraticCurveTo(1.5, 22, 2.5, 30);
     g.moveTo(9, 14); g.quadraticCurveTo(10, 21, 11, 27.5); g.stroke();
-    g.strokeStyle = GOLD; g.lineWidth = 1.1; g.beginPath(); g.moveTo(5, 4); g.quadraticCurveTo(6, 17, 7.4, 30.3); g.stroke();
-    g.lineWidth = 1.7; g.beginPath(); g.moveTo(-14, 27); g.quadraticCurveTo(-6, 31, 0, 30.4); g.quadraticCurveTo(7, 31, 14, 27); g.stroke();
-    // rope belt
-    g.fillStyle = '#3a2416'; g.beginPath(); g.moveTo(-9.6, 9); g.quadraticCurveTo(0, 11.5, 9.6, 9); g.lineTo(9.9, 12);
+    // trim: front opening and hem
+    g.strokeStyle = trim; g.lineWidth = 1.3; g.beginPath(); g.moveTo(5, 4); g.quadraticCurveTo(6, 17, 7.4, 30.3); g.stroke();
+    g.lineWidth = 2; g.beginPath(); g.moveTo(-14, 27); g.quadraticCurveTo(-6, 31, 0, 30.4); g.quadraticCurveTo(7, 31, 14, 27); g.stroke();
+    // sash in the trim colour, gold buckle
+    g.fillStyle = trim; g.beginPath(); g.moveTo(-9.6, 9); g.quadraticCurveTo(0, 11.5, 9.6, 9); g.lineTo(9.9, 12);
     g.quadraticCurveTo(0, 14.5, -9.9, 12); g.closePath(); g.fill();
+    g.strokeStyle = 'rgba(0,0,0,0.45)'; g.lineWidth = 0.6; g.stroke();
     g.fillStyle = GOLD; g.fillRect(4, 9.8, 2.8, 3);
-    // mantle over the shoulders
+    g.strokeStyle = 'rgba(60,30,0,0.6)'; g.lineWidth = 0.5; g.strokeRect(4, 9.8, 2.8, 3);
+    // mantle over the shoulders, edged in trim
     g.beginPath(); g.moveTo(-9, 0); g.quadraticCurveTo(0, -3.6, 9, 0); g.quadraticCurveTo(10.5, 5, 7, 7.5);
     g.quadraticCurveTo(0, 9.5, -7, 7.5); g.quadraticCurveTo(-10.5, 5, -9, 0); g.closePath();
     g.fillStyle = rgba(dark, 1); g.fill(); g.strokeStyle = 'rgba(0,0,0,0.5)'; g.lineWidth = 0.9; g.stroke();
+    g.strokeStyle = trim; g.lineWidth = 0.9; g.beginPath(); g.moveTo(9.8, 4.4); g.quadraticCurveTo(9.4, 6.4, 7, 7.5);
+    g.quadraticCurveTo(0, 9.5, -7, 7.5); g.quadraticCurveTo(-9.4, 6.4, -9.8, 4.4); g.stroke();
     body(); g.strokeStyle = 'rgba(0,0,0,0.65)'; g.lineWidth = 1.1; g.stroke();
   });
   const sleeve = (shade) => part(-6, -6.5, 18, 6.5, (g) => {
@@ -209,29 +382,18 @@ function wizardKit(color) {
     g.quadraticCurveTo(13.8, 0, 12.6, 5.2); g.lineTo(11, 4.6); g.quadraticCurveTo(6, 4.6, -3, 3.8);
     g.quadraticCurveTo(-5.4, 0, -3, -3.8); g.closePath();
     g.fillStyle = rgba(shade, 1); g.fill(); g.strokeStyle = 'rgba(0,0,0,0.6)'; g.lineWidth = 0.9; g.stroke();
-    g.strokeStyle = GOLD; g.lineWidth = 1; g.beginPath(); g.moveTo(11.8, -4.6); g.lineTo(11.8, 4.6); g.stroke();
+    g.strokeStyle = trim; g.lineWidth = 1.4; g.beginPath(); g.moveTo(11.6, -4.6); g.lineTo(11.6, 4.6); g.stroke();
     g.fillStyle = '#efc69b'; g.beginPath(); g.arc(14.4, 0, 2.7, 0, TAU); g.fill();
     g.strokeStyle = 'rgba(80,40,20,0.5)'; g.lineWidth = 0.6; g.stroke();
   });
-  const hat = part(-17, -31, 16, 6, (g) => {
-    g.fillStyle = rgba(deep, 1); g.beginPath(); g.ellipse(0, 0, 14, 4.2, 0, 0, TAU); g.fill();
-    g.strokeStyle = 'rgba(0,0,0,0.6)'; g.lineWidth = 0.9; g.stroke();
-    g.beginPath(); g.moveTo(-7.5, -0.5); g.quadraticCurveTo(-4.5, -12, -3, -18); g.quadraticCurveTo(-6, -25.5, -14, -28);
-    g.quadraticCurveTo(-2.5, -24.5, 1.5, -17); g.quadraticCurveTo(5.5, -9, 7.5, -0.5); g.closePath();
-    const gr = g.createLinearGradient(-8, 0, 8, 0);
-    gr.addColorStop(0, rgba(deep, 1)); gr.addColorStop(0.55, rgba(base, 1)); gr.addColorStop(1, rgba(light, 1));
-    g.fillStyle = gr; g.fill(); g.strokeStyle = 'rgba(0,0,0,0.6)'; g.lineWidth = 0.9; g.stroke();
-    g.beginPath(); g.moveTo(-7.4, -1); g.quadraticCurveTo(0, 1.6, 7.4, -1); g.lineTo(6.9, -4.2);
-    g.quadraticCurveTo(0, -1.8, -6.6, -4.2); g.closePath(); g.fillStyle = GOLD; g.fill();
-    g.strokeStyle = 'rgba(60,30,0,0.5)'; g.lineWidth = 0.6; g.stroke();
-    // little star on the cone
-    g.fillStyle = '#ffeaa0'; g.beginPath();
-    for (let i = 0; i < 10; i++) { const a = (i / 10) * TAU - Math.PI / 2, r = i % 2 ? 0.9 : 2.2; g.lineTo(0.8 + Math.cos(a) * r, -10 + Math.sin(a) * r); }
-    g.fill();
-    g.strokeStyle = rgba(light, 0.9); g.lineWidth = 1.1; g.beginPath(); g.ellipse(0, 0, 14, 4.2, 0, 0.2, Math.PI - 0.2); g.stroke();
-  });
-  k = { robe, sleeve: sleeve(dark), sleeveBack: sleeve(deep), hat };
-  kitCache.set(color, k);
+  const hat = skin.hat === 'horns' ? hatHorns(skin.orb)
+    : skin.hat === 'hood' ? hatHood(base, deep, light, trim, skin.orb)
+    : skin.hat === 'crown' ? hatCrown(skin.orb)
+    : skin.hat === 'antlers' ? hatAntlers()
+    : hatPointed(base, deep, light, trim);
+  k = { robe, sleeve: sleeve(dark), sleeveBack: sleeve(deep), hat, orb: skin.orb };
+  if (kitCache.size > 64) kitCache.clear();
+  kitCache.set(key, k);
   return k;
 }
 
@@ -241,12 +403,12 @@ const FEET = 9;     // feet sit this far below the simulation position
 const PIVOT = 24;   // lean / tumble pivot above the feet
 
 /** Draw a posed wizard into st's private canvas. Returns the staff tip in local (unflipped) coords. */
-function composeWizard(st, kit, pose) {
+function composeWizard(st, kit, pose, sc = FSC) {
   const g = st.g;
   g.setTransform(1, 0, 0, 1, 0, 0);
   g.globalCompositeOperation = 'source-over'; g.globalAlpha = 1;
   g.clearRect(0, 0, st.cv.width, st.cv.height);
-  g.setTransform(pose.flip ? -FSC : FSC, 0, 0, FSC, -FIG.x * FSC, -FIG.y * FSC);
+  g.setTransform(pose.flip ? -sc : sc, 0, 0, sc, -FIG.x * sc, -FIG.y * sc);
   const { phase, walk } = pose;
   const sY = SHOULDER_Y + pose.bob;
   // feet (alternate stride + lift)
@@ -261,8 +423,9 @@ function composeWizard(st, kit, pose) {
   g.save(); g.translate(0, sY); g.transform(1, 0, pose.shear, 1, 0, 0); g.scale(1, pose.breath); drawPart(g, kit.robe); g.restore();
   // head + hat
   const hx = 1 + pose.shear * 3, hy = sY - 7;
-  drawPart(g, headPart, hx, hy);
-  g.save(); g.translate(hx - 0.5, hy - 5); g.rotate(pose.hatTilt); drawPart(g, kit.hat); g.restore();
+  const hat = kit.hat;
+  if (!hat.hideHead) drawPart(g, headPart, hx, hy);
+  g.save(); g.translate(hx + hat.x, hy + hat.y); g.rotate(pose.hatTilt); drawPart(g, hat.p); g.restore();
   // staff, then the front arm whose hand grips it
   const shx = 4, shy = sY + 3;
   const hdx = shx + Math.cos(pose.armA) * 14.4, hdy = shy + Math.sin(pose.armA) * 14.4;
@@ -271,6 +434,7 @@ function composeWizard(st, kit, pose) {
   g.lineCap = 'round';
   g.strokeStyle = '#26160c'; g.lineWidth = 3.4; g.beginPath(); g.moveTo(bx, by); g.lineTo(tx, ty); g.stroke();
   g.strokeStyle = '#94643a'; g.lineWidth = 2; g.stroke();
+  g.fillStyle = kit.orb; g.beginPath(); g.arc(tx + dx * 2.6, ty + dy * 2.6, 2.2, 0, TAU); g.fill();
   g.strokeStyle = '#26160c'; g.lineWidth = 1.4; g.beginPath(); g.arc(tx + dx * 2.6, ty + dy * 2.6, 2.8, 0, TAU); g.stroke();
   g.save(); g.translate(shx, shy); g.rotate(pose.armA); drawPart(g, kit.sleeve); g.restore();
   // whole-figure tints
@@ -551,7 +715,7 @@ const nums = [];    // floating damage numbers
 const dying = [];   // death animations
 const falling = []; // meteors in the air this frame
 let trauma = 0, shakeT = 0;
-const K_GLOW = 0, K_SPARK = 1, K_SMOKE = 2, K_FLAME = 3;
+const K_GLOW = 0, K_SPARK = 1, K_SMOKE = 2, K_FLAME = 3, K_DEBRIS = 4;
 
 function emit(x, y, n, color, speed, life, size, kind = K_GLOW, drag = 0.93) {
   const img = kind === K_SMOKE ? smokeSpr : kind === K_FLAME ? null : glow(color);
@@ -569,6 +733,7 @@ function addShake(v) { trauma = Math.min(1, trauma + v); }
 export function resetFx() {
   parts.length = rings.length = ghosts.length = nums.length = falling.length = dying.length = 0;
   decals = []; trails.clear(); pstate.clear(); seenZones.clear(); trauma = 0; myDanger = 0;
+  crumbling.length = 0; terrainFade.clear(); terrainPending = null; terrainLast = [];
 }
 
 /** Screen shake offset in CSS px for this frame (subtle, decays quickly). */
@@ -664,6 +829,8 @@ export function fxEvent(ev, env) {
     emit(c, d, 16, '', 120, 1.6, 22, K_SMOKE, 0.95);
     rings.push({ kind: 'ring', x: c, y: d, r: 80, t: 0, max: 0.5, color: '#ff5522' });
     addShake(a === env.myId ? 0.5 : 0.2 * near(c, d, 600));
+  } else if (type === 'crumble') {
+    crumbleFx(a, b, c, d, near);
   }
 }
 
@@ -690,7 +857,11 @@ export function drawPlayers(ctx, players, roster, myId, now, dt) {
   drawDying(ctx, dt, now);
 
   const list = players.filter((p) => p.alive).sort((p, q) => p.y - q.y);
+  // obstacle bodies interleaved by depth: drawn before any wizard standing in front of them
+  const terr = terrainPending; terrainPending = null;
+  let ti = 0;
   for (const p of list) {
+    if (terr) while (ti < terr.length && terr[ti][3] < p.y) terrainBody(ctx, terr[ti++], list, dt);
     const info = roster.get(p.id) || { color: '#cccccc', name: '' };
     const isMe = p.id === myId;
     let st = pstate.get(p.id);
@@ -718,6 +889,7 @@ export function drawPlayers(ctx, players, roster, myId, now, dt) {
     if (isMe) myDanger = Math.max(myDanger, p.lava ? 0.85 : clamp01((0.35 - p.hp / p.maxHp) / 0.35) * 0.8);
     drawWizard(ctx, p, info, isMe, st, now, dt);
   }
+  if (terr) while (ti < terr.length) terrainBody(ctx, terr[ti++], list, dt);
   for (const p of list) {
     const info = roster.get(p.id) || { color: '#cccccc', name: '' };
     const st = pstate.get(p.id);
@@ -735,7 +907,7 @@ export function drawPlayers(ctx, players, roster, myId, now, dt) {
 }
 
 function drawWizard(ctx, p, info, isMe, st, now, dt) {
-  const kit = wizardKit(info.color);
+  const kit = wizardKit(info.color, info.skin);
   const speed = Math.hypot(st.vx, st.vy);
   const knock = smooth(330, 600, speed);              // flung by knockback
   const walk = smooth(15, 90, speed) * (1 - knock);   // walking under own power
@@ -801,9 +973,9 @@ function drawWizard(ctx, p, info, isMe, st, now, dt) {
     const c = Math.cos(rot), s = Math.sin(rot), ly = tip.y + PIVOT;
     tipWX = p.x + tipX * c - ly * s; tipWY = fy - PIVOT + tipX * s + ly * c;
   }
-  // glowing staff tip in the player's colour (flares while casting)
+  // glowing staff orb in the skin's orb colour (flares while casting)
   ctx.globalCompositeOperation = 'lighter';
-  blit(ctx, glow(info.color), tipWX, tipWY, 11 + 2 * Math.sin(now / 110 + p.id) + castW * 12);
+  blit(ctx, glow(kit.orb), tipWX, tipWY, 11 + 2 * Math.sin(now / 110 + p.id) + castW * 12);
   blit(ctx, glow('#ffffff'), tipWX, tipWY, 4 + castW * 4);
   if (p.lava) { // molten ripple around the legs
     ctx.globalAlpha = 0.6 + 0.3 * Math.sin(now / 120 + p.id);
@@ -879,6 +1051,330 @@ function drawDying(ctx, dt, now) {
     }
   }
   dying.length = n;
+}
+
+// ---------------- terrain (pillars & rocks) ----------------
+// Obstacles O: [[id, kind, x, y, r], ...]. Each gets two cached sprites per (kind, r, variant):
+// a ground layer (cast shadow + rubble) drawn under everything, and an upright body that is
+// depth-sorted with the wizards inside drawPlayers so a pillar hides whoever stands behind it.
+const OSC = 2;     // terrain sprite supersampling
+const OK = 0.6;    // squash of round footprints seen at the arena's slight top-down angle
+const terrainCache = new Map();
+const terrainFade = new Map(); // pillar id -> current body alpha (fades when a wizard is behind it)
+let terrainPending = null;     // obstacles whose bodies still need drawing this frame
+let terrainLast = [];          // latest obstacle list (to find the sprite of a crumbling one)
+
+const stoneCol = (tone, c) => [c[0] * tone, c[1] * tone, c[2] * tone];
+/** Offscreen sprite with the origin at the obstacle's ground centre, in world units. */
+function terrainSprite(ox, oy, w, h, draw) {
+  const c = makeCanvas(w * OSC, h * OSC), g = c.getContext('2d');
+  g.scale(OSC, OSC); g.translate(ox, oy); g.lineJoin = 'round'; g.lineCap = 'round';
+  draw(g);
+  return { c, ox, oy, w, h };
+}
+const shadowBlob = (g, x, y, rx, ry, a, rot = 0) => {
+  g.save(); g.translate(x, y); g.rotate(rot); g.globalAlpha = a;
+  g.drawImage(shadowSpr, -rx, -ry, rx * 2, ry * 2); g.restore();
+};
+function rubble(g, R, r, n, r0, r1) {
+  for (let i = 0; i < n; i++) {
+    const a = R() * TAU, d = r * (r0 + R() * (r1 - r0)), x = Math.cos(a) * d, y = Math.sin(a) * d * OK, s = 1.2 + R() * 2.6;
+    g.fillStyle = rgba(stoneCol(0.7 + R() * 0.5, [74, 64, 56]), 1);
+    g.beginPath(); g.ellipse(x, y, s, s * 0.75, R() * 3, 0, TAU); g.fill();
+    g.strokeStyle = 'rgba(10,5,3,0.6)'; g.lineWidth = 0.6; g.stroke();
+  }
+}
+function crackPath(g, R, x, y, a, segs, len) {
+  g.beginPath(); g.moveTo(x, y);
+  for (let s = 0; s < segs; s++) { a += (R() - 0.5) * 1.1; x += Math.cos(a) * len; y += Math.sin(a) * len; g.lineTo(x, y); }
+}
+
+/** Upright stone drum: side wall from yb up to yt plus its top face. */
+function drum(g, rx, yb, yt, tone, top = true) {
+  const ry = rx * OK;
+  g.beginPath(); g.moveTo(-rx, yt); g.lineTo(-rx, yb); g.ellipse(0, yb, rx, ry, 0, Math.PI, 0, true);
+  g.lineTo(rx, yt); g.ellipse(0, yt, rx, ry, 0, 0, Math.PI, false); g.closePath();
+  const gr = g.createLinearGradient(-rx, 0, rx, 0);
+  gr.addColorStop(0, rgba(stoneCol(tone, [30, 23, 19]), 1)); gr.addColorStop(0.38, rgba(stoneCol(tone, [62, 52, 46]), 1));
+  gr.addColorStop(0.74, rgba(stoneCol(tone, [108, 96, 86]), 1)); gr.addColorStop(0.9, rgba(stoneCol(tone, [128, 116, 104]), 1));
+  gr.addColorStop(1, rgba(stoneCol(tone, [70, 60, 52]), 1));
+  g.fillStyle = gr; g.fill();
+  g.strokeStyle = 'rgba(12,6,3,0.85)'; g.lineWidth = 1.1; g.stroke();
+  if (top) {
+    g.beginPath(); g.ellipse(0, yt, rx, ry, 0, 0, TAU);
+    const tg = g.createRadialGradient(rx * 0.3, yt - ry * 0.35, 0, 0, yt, rx * 1.1);
+    tg.addColorStop(0, rgba(stoneCol(tone, [150, 138, 124]), 1)); tg.addColorStop(1, rgba(stoneCol(tone, [88, 78, 70]), 1));
+    g.fillStyle = tg; g.fill();
+    g.strokeStyle = 'rgba(12,6,3,0.85)'; g.lineWidth = 1.1; g.stroke();
+  }
+}
+
+function pillarSprites(r, v) {
+  const R = seeded(1000 + Math.round(r) * 13 + v * 101), tone = 0.86 + R() * 0.26;
+  const broken = v === 3, runes = v === 1;
+  const H = 70 + r * 1.9 + (R() - 0.5) * 10, Hs = broken ? H * (0.6 + R() * 0.12) : H;
+  const rp = r * 1.2, rs = r * 0.84, rc = r * 1.1;
+  const ground = terrainSprite(r * 3.2, r * 1.4, r * 5.4, r * 3.1, (g) => {
+    shadowBlob(g, -r * 0.95, r * 0.35, r * 2.1, r * 0.95, 0.75, 0.22); // cast shadow, light from the upper right
+    shadowBlob(g, 0, r * 0.1, r * 1.55, r * 1.0, 0.9);
+    rubble(g, R, r, broken ? 14 : 6, 1.1, broken ? 1.9 : 1.45);
+  });
+  const top = Hs + rc * OK + r * 0.3 + 6, W = rp * 2 + 8;
+  const body = terrainSprite(W / 2, top, W, top + rp * OK + 6, (g) => {
+    drum(g, rp, 0, -7, tone);                 // plinth
+    drum(g, rp * 0.92, -7, -13, tone * 1.04); // step
+    // shaft (jagged top when broken)
+    const yb = -13, yt = broken ? -Hs : -(H - 12), ry = rs * OK;
+    const jag = [];
+    if (broken) for (let i = 0; i <= 8; i++) jag.push((R() - 0.3) * r * 0.55 - (i === 4 ? r * 0.3 : 0));
+    const shaftPath = () => {
+      g.beginPath(); g.moveTo(-rs, yt + (broken ? jag[0] : 0)); g.lineTo(-rs, yb); g.ellipse(0, yb, rs, ry, 0, Math.PI, 0, true);
+      if (broken) { for (let i = 8; i >= 0; i--) g.lineTo(-rs + (i / 8) * rs * 2, yt + jag[i] + Math.sin((i / 8) * Math.PI) * ry * 0.6); }
+      else { g.lineTo(rs, yt); g.ellipse(0, yt, rs, ry, 0, 0, Math.PI, false); }
+      g.closePath();
+    };
+    shaftPath();
+    const gr = g.createLinearGradient(-rs, 0, rs, 0);
+    gr.addColorStop(0, rgba(stoneCol(tone, [30, 23, 19]), 1)); gr.addColorStop(0.38, rgba(stoneCol(tone, [64, 54, 47]), 1));
+    gr.addColorStop(0.76, rgba(stoneCol(tone, [112, 100, 89]), 1)); gr.addColorStop(0.9, rgba(stoneCol(tone, [130, 118, 106]), 1));
+    gr.addColorStop(1, rgba(stoneCol(tone, [72, 62, 54]), 1));
+    g.fillStyle = gr; g.fill();
+    g.save(); g.clip();
+    // fluting follows the curve of the drum
+    for (let i = -3; i <= 3; i++) {
+      const th = (i / 3.6) * (Math.PI / 2), x = Math.sin(th) * rs, cy = Math.cos(th) * ry;
+      g.strokeStyle = 'rgba(0,0,0,0.3)'; g.lineWidth = 1.6 * Math.cos(th) + 0.4;
+      g.beginPath(); g.moveTo(x, yb + cy); g.lineTo(x, yt + cy - 20); g.stroke();
+      g.strokeStyle = 'rgba(255,235,210,0.08)'; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(x + 1.6, yb + cy); g.lineTo(x + 1.6, yt + cy - 20); g.stroke();
+    }
+    // horizontal drum joints
+    g.strokeStyle = 'rgba(10,5,3,0.5)'; g.lineWidth = 1;
+    const joints = 2 + Math.floor(R() * 2);
+    for (let j = 1; j <= joints; j++) {
+      const y = lerp(yb, yt, j / (joints + 1)) + (R() - 0.5) * 6;
+      g.beginPath(); g.ellipse(0, y, rs, ry, 0, 0.05, Math.PI - 0.05); g.stroke();
+    }
+    // soot rising from the base, cracks
+    const sg = g.createLinearGradient(0, yb + ry, 0, yb - 40);
+    sg.addColorStop(0, 'rgba(10,5,3,0.55)'); sg.addColorStop(1, 'rgba(10,5,3,0)');
+    g.fillStyle = sg; g.fillRect(-rs, yb - 40, rs * 2, 40 + ry);
+    for (let i = 0; i < 2 + (broken ? 2 : 0); i++) {
+      crackPath(g, R, (R() - 0.5) * rs * 1.4, lerp(yt, yb, R() * 0.6), Math.PI / 2 + (R() - 0.5), 4, 6 + R() * 6);
+      g.strokeStyle = 'rgba(255,230,200,0.08)'; g.lineWidth = 1.6; g.stroke();
+      g.strokeStyle = 'rgba(10,5,3,0.75)'; g.lineWidth = 1.1; g.stroke();
+    }
+    if (runes) { // carved runes smouldering with lava light
+      const cy = lerp(yb, yt, 0.45);
+      g.save(); g.translate(rs * 0.25, cy);
+      for (const [col, w] of [['rgba(255,110,30,0.35)', 3.6], ['rgba(255,170,80,0.95)', 1.2]]) {
+        g.strokeStyle = col; g.lineWidth = w; g.beginPath();
+        const RR = seeded(77 + v);
+        for (let k = 0; k < 3; k++) {
+          const y0 = -16 + k * 12;
+          g.moveTo((RR() - 0.5) * 6, y0); g.lineTo((RR() - 0.5) * 6, y0 + 7); g.moveTo(-3, y0 + 3 + RR() * 2); g.lineTo(3, y0 + 2 + RR() * 3);
+        }
+        g.stroke();
+      }
+      g.restore();
+    }
+    g.restore();
+    g.strokeStyle = 'rgba(12,6,3,0.85)'; g.lineWidth = 1.1; shaftPath(); g.stroke();
+    if (broken) { // rough broken top face
+      g.beginPath();
+      for (let i = 0; i <= 8; i++) g.lineTo(-rs + (i / 8) * rs * 2, yt + jag[i] + Math.sin((i / 8) * Math.PI) * ry * 0.6);
+      for (let i = 8; i >= 0; i--) g.lineTo(-rs * 0.9 + (i / 8) * rs * 1.8, yt + jag[i] * 0.6 - Math.sin((i / 8) * Math.PI) * ry * 0.9);
+      g.closePath();
+      g.fillStyle = rgba(stoneCol(tone, [120, 108, 96]), 1); g.fill();
+      g.strokeStyle = 'rgba(12,6,3,0.8)'; g.lineWidth = 0.9; g.stroke();
+    } else {
+      drum(g, rc * 0.95, -(H - 12), -(H - 6), tone * 1.05, false); // capital neck
+      drum(g, rc, -(H - 6), -H, tone * 1.1);                       // abacus slab
+      // weathered chips on the top face
+      g.fillStyle = 'rgba(20,10,6,0.35)';
+      for (let i = 0; i < 4; i++) { g.beginPath(); g.ellipse((R() - 0.5) * rc * 1.2, -H + (R() - 0.5) * rc * OK, 1.5 + R() * 3, 1 + R() * 1.5, 0, 0, TAU); g.fill(); }
+    }
+  });
+  return { ground, body, h: broken ? Hs + r * 0.3 : H };
+}
+
+function rockSprites(r, v) {
+  const R = seeded(5000 + Math.round(r) * 17 + v * 131), tone = 0.85 + R() * 0.3;
+  const h = r * (0.55 + R() * 0.3), N = 13, pts = [];
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * TAU + (R() - 0.5) * 0.3, j = 0.86 + R() * 0.24, s = Math.sin(a);
+    pts.push([Math.cos(a) * r * 1.08 * j, s > 0 ? s * r * OK * j : -Math.pow(-s, 0.65) * (r * OK + h) * j]);
+  }
+  const blob = (g, sc = 1, ox = 0, oy = 0) => {
+    g.beginPath();
+    for (let i = 0; i <= N; i++) {
+      const p0 = pts[i % N], p1 = pts[(i + 1) % N], mx = (p0[0] + p1[0]) / 2, my = (p0[1] + p1[1]) / 2;
+      if (!i) g.moveTo(mx * sc + ox, my * sc + oy); else g.quadraticCurveTo(p0[0] * sc + ox, p0[1] * sc + oy, mx * sc + ox, my * sc + oy);
+    }
+    g.closePath();
+  };
+  const ground = terrainSprite(r * 2.8, r * 1.3, r * 4.6, r * 2.8, (g) => {
+    shadowBlob(g, -r * 0.6, r * 0.3, r * 1.9, r * 0.95, 0.7, 0.22);
+    shadowBlob(g, 0, r * 0.15, r * 1.4, r * 0.9, 0.85);
+    rubble(g, R, r, 5, 1.05, 1.5);
+  });
+  const top = (r * OK + h) * 1.12 + 6, W = r * 2.4 + 10;
+  const body = terrainSprite(W / 2, top, W, top + r * OK * 1.12 + 6, (g) => {
+    blob(g);
+    const gr = g.createRadialGradient(r * 0.35, -h * 0.85, 0, 0, -h * 0.3, r * 1.7);
+    gr.addColorStop(0, rgba(stoneCol(tone, [160, 146, 132]), 1)); gr.addColorStop(0.35, rgba(stoneCol(tone, [104, 92, 82]), 1));
+    gr.addColorStop(0.72, rgba(stoneCol(tone, [58, 49, 42]), 1)); gr.addColorStop(1, rgba(stoneCol(tone, [26, 20, 16]), 1));
+    g.fillStyle = gr; g.fill();
+    g.save(); g.clip();
+    // flat top facet catching the light, darker underside
+    blob(g, 0.55, r * 0.14, -h * 0.42); g.fillStyle = 'rgba(255,238,215,0.1)'; g.fill();
+    blob(g, 0.3, r * 0.25, -h * 0.6); g.fillStyle = 'rgba(255,238,215,0.07)'; g.fill();
+    const bg = g.createLinearGradient(0, -h * 0.1, 0, r * OK);
+    bg.addColorStop(0, 'rgba(8,4,2,0)'); bg.addColorStop(1, 'rgba(8,4,2,0.6)');
+    g.fillStyle = bg; g.fillRect(-r * 1.3, -h * 0.1, r * 2.6, r * OK + h);
+    for (let i = 0; i < 40; i++) {
+      g.fillStyle = R() < 0.5 ? 'rgba(255,240,220,0.08)' : 'rgba(0,0,0,0.16)';
+      g.fillRect((R() - 0.5) * r * 2.2, -h - r * OK + R() * (h + r * OK * 2), 1 + R(), 1 + R());
+    }
+    for (let i = 0; i < 2; i++) {
+      crackPath(g, R, (R() - 0.5) * r, -h * (0.3 + R() * 0.6), Math.PI / 2 + (R() - 0.5) * 1.4, 3, r * 0.22);
+      if (v === 1 && i === 0) {
+        g.strokeStyle = 'rgba(255,110,30,0.45)'; g.lineWidth = 3.2; g.stroke();
+        g.strokeStyle = 'rgba(255,190,90,0.95)'; g.lineWidth = 1.1; g.stroke();
+      } else {
+        g.strokeStyle = 'rgba(255,230,200,0.08)'; g.lineWidth = 1.8; g.stroke();
+        g.strokeStyle = 'rgba(10,5,3,0.75)'; g.lineWidth = 1.1; g.stroke();
+      }
+    }
+    g.restore();
+    blob(g); g.strokeStyle = 'rgba(12,6,3,0.9)'; g.lineWidth = 1.4; g.stroke();
+  });
+  return { ground, body, h: h + r * OK };
+}
+
+function terrainKit(kind, r, id) {
+  const v = ((id | 0) * 2654435761 >>> 0) % 4, rr = Math.round(r);
+  const key = kind + '|' + rr + '|' + v;
+  let k = terrainCache.get(key);
+  if (!k) {
+    if (terrainCache.size > 160) terrainCache.clear();
+    k = kind === PILLAR ? pillarSprites(rr, v) : rockSprites(rr, v);
+    terrainCache.set(key, k);
+  }
+  return k;
+}
+const blitSpr = (ctx, s, x, y) => ctx.drawImage(s.c, x - s.ox, y - s.oy, s.w, s.h);
+
+/** Draw one obstacle's upright body, fading pillars that hide a wizard standing behind them. */
+function terrainBody(ctx, o, players, dt) {
+  const [id, kind, x, y, r] = o, k = terrainKit(kind, r, id);
+  let a = 1;
+  if (kind === PILLAR) {
+    let target = 1;
+    if (players) {
+      for (const p of players) {
+        if (!p.alive || p.y >= y || p.y < y - k.h - 10 || Math.abs(p.x - x) > r + 26) continue;
+        target = 0.42; break;
+      }
+    }
+    const cur = terrainFade.has(id) ? terrainFade.get(id) : 1;
+    a = cur + (target - cur) * (1 - Math.exp(-10 * dt));
+    if (terrainFade.size > 200) terrainFade.clear();
+    terrainFade.set(id, a);
+  }
+  if (a < 0.995) { ctx.globalAlpha = a; blitSpr(ctx, k.body, x, y); ctx.globalAlpha = 1; } else blitSpr(ctx, k.body, x, y);
+}
+
+/**
+ * Terrain ground layer: obstacle shadows and rubble (world space, after drawZones, before
+ * drawPlayers). The upright bodies are depth-sorted with the wizards by drawPlayers.
+ */
+export function drawTerrain(ctx, O, now) {
+  if (!O || !O.length) { terrainPending = null; return; }
+  terrainLast = O;
+  for (const o of O) blitSpr(ctx, terrainKit(o[1], o[4], o[0]).ground, o[2], o[3]);
+  terrainPending = O.slice().sort((p, q) => p[3] - q[3]);
+}
+
+/**
+ * Pillar and rock bodies are drawn depth-sorted inside drawPlayers, so this only draws any that
+ * drawPlayers didn't get to this frame (e.g. it wasn't called). Safe to call every frame.
+ */
+export function drawTerrainTops(ctx, O, players, now) {
+  if (!terrainPending) return;
+  for (const o of terrainPending) terrainBody(ctx, o, players, 1 / 60);
+  terrainPending = null;
+}
+
+// obstacles sinking into the lava after the arena shrank under them
+const crumbling = [];
+function crumbleFx(x, y, r, kind, near) {
+  const o = terrainLast.find((q) => Math.abs(q[2] - x) < 1 && Math.abs(q[3] - y) < 1);
+  const k = terrainKit(kind, r, o ? o[0] : 0), pillar = kind === PILLAR;
+  crumbling.push({ k, x, y, r, t: 0, max: pillar ? 1.1 : 0.8, tilt: (Math.random() < 0.5 ? -1 : 1) * rand(0.12, 0.3) });
+  const n = Math.round((pillar ? 14 : 8) + r * 0.5);
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * TAU, v = rand(50, 190), l = rand(0.5, 0.9);
+    parts.push({ x: x + Math.cos(a) * r * 0.6, y: y - rand(0, k.h * 0.7), vx: Math.cos(a) * v, vy: Math.sin(a) * v * 0.6 - rand(60, 180),
+      life: l, max: l, size: rand(2, 5.5), kind: K_DEBRIS, img: null, col: rgba(stoneCol(rand(0.55, 1.25), [92, 82, 72]), 1), drag: 0.97 });
+  }
+  emit(x, y - 10, pillar ? 14 : 9, '', r * 2.2, 1.3, r * 0.9, K_SMOKE, 0.92); // dust
+  emit(x, y, 14, '#ffb050', 220, 0.45, 2.2, K_SPARK, 0.9);
+  for (let i = 0; i < 12; i++) { const a = Math.random() * TAU; flame(x + Math.cos(a) * r, y + Math.sin(a) * r * OK, Math.cos(a) * 40, -rand(30, 90), rand(0.35, 0.7), rand(8, 16)); }
+  rings.push({ kind: 'ring', x, y, r: r * 2.2, t: 0, max: 0.5, color: '#ffa050' });
+  addShake((pillar ? 0.35 : 0.18) * near(x, y, 700));
+}
+function drawCrumbling(ctx, dt, now) {
+  let n = 0;
+  for (const c of crumbling) {
+    c.t += dt;
+    if (c.t >= c.max) continue;
+    crumbling[n++] = c;
+    const q = c.t / c.max, b = c.k.body, sink = Math.pow(q, 1.5) * (b.oy + 4), vis = b.oy - sink + c.r * OK * 0.4;
+    if (vis > 1) {
+      ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.tilt * q * q);
+      ctx.globalAlpha = 1 - q * q * q;
+      ctx.drawImage(b.c, 0, 0, b.c.width, Math.min(b.c.height, vis * OSC), -b.ox, -b.oy + sink, b.w, Math.min(b.h, vis));
+      ctx.restore(); ctx.globalAlpha = 1;
+    }
+    // molten ripple where it goes under
+    ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = 0.7 * (1 - q);
+    ctx.strokeStyle = '#ffc060'; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.ellipse(c.x, c.y, c.r * (1 + q * 0.8), c.r * OK * (1 + q * 0.8), 0, 0, TAU); ctx.stroke();
+    ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+    if (Math.random() < 0.6) flame(c.x + rand(-c.r, c.r), c.y + rand(-4, 4), rand(-15, 15), -rand(40, 90), rand(0.3, 0.6), rand(8, 14));
+  }
+  crumbling.length = n;
+}
+
+// ---------------- menu skin preview ----------------
+let preview = null;
+/**
+ * Paint one idle wizard (robe colour + skin) centred in a canvas sized in device pixels.
+ * Independent of game state; cheap enough to call every animation frame.
+ */
+export function drawSkinPreview(canvas, color, skinId, now) {
+  const ctx = canvas.getContext('2d'), W = canvas.width, H = canvas.height;
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+  ctx.clearRect(0, 0, W, H);
+  if (!W || !H) return;
+  const s = Math.min(H / 92, W / 62);
+  const sc = Math.max(FSC, Math.min(5, Math.ceil(s)));
+  if (!preview || preview.sc !== sc) { const cv = makeCanvas(FIG.w * sc, FIG.h * sc); preview = { cv, g: cv.getContext('2d'), sc }; }
+  const kit = wizardKit(color || '#cccccc', skinId);
+  const idle = Math.sin(now / 550);
+  const tip = composeWizard(preview, kit, {
+    flip: false, phase: 0, walk: 0, bob: idle * 0.8, breath: 1 + idle * 0.015, shear: Math.sin(now / 800) * 0.025,
+    hatTilt: -0.06 + Math.sin(now / 900) * 0.02, armA: 1.15, staffA: -1.42, offA: 1.95, thrust: 0, tint: 0, tintCol: '#000', flash: 0,
+  }, sc);
+  const cx = W / 2 - 2 * s, fy = H / 2 + 35 * s; // the figure spans roughly y -72..+2 above its feet
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(shadowSpr, cx - 22 * s, fy - 8 * s, 44 * s, 16 * s);
+  ctx.drawImage(preview.cv, cx + FIG.x * s, fy + FIG.y * s, FIG.w * s, FIG.h * s);
+  ctx.globalCompositeOperation = 'lighter';
+  blit(ctx, glow(kit.orb), cx + tip.x * s, fy + tip.y * s, (11 + 2 * Math.sin(now / 110) + Math.sin(now / 47) * 0.6) * s);
+  blit(ctx, glow('#ffffff'), cx + tip.x * s, fy + tip.y * s, 4 * s);
+  ctx.globalCompositeOperation = 'source-over';
 }
 
 // ---------------- projectiles & meteors ----------------
@@ -1052,6 +1548,8 @@ export function drawEffects(ctx, dt, now, view, radius) {
   for (const d of decals) d.t += dt;
   while (decals.length && decals[0].t > decals[0].max) decals.shift();
 
+  drawCrumbling(ctx, dt, now);
+
   // blink afterimages
   ctx.globalCompositeOperation = 'lighter';
   let gn = 0;
@@ -1078,6 +1576,7 @@ export function drawEffects(ctx, dt, now, view, radius) {
     if (p.life <= 0) continue;
     p.x += p.vx * dt; p.y += p.vy * dt;
     if (p.kind === K_FLAME) p.vy -= 60 * dt; // flames rise
+    else if (p.kind === K_DEBRIS) p.vy += 520 * dt; // chips arc back down
     if (p.drag !== 1) { const k = Math.pow(p.drag, dt * 60); p.vx *= k; p.vy *= k; }
     parts[n++] = p;
   }
@@ -1085,6 +1584,11 @@ export function drawEffects(ctx, dt, now, view, radius) {
   if (parts.length > 1600) parts.splice(0, parts.length - 1600);
 
   for (const p of parts) {
+    if (p.kind === K_DEBRIS) {
+      ctx.globalAlpha = Math.min(1, (p.life / p.max) * 3); ctx.fillStyle = p.col;
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size * 0.4, p.size, p.size * 0.8);
+      continue;
+    }
     if (p.kind !== K_SMOKE) continue;
     const q = p.life / p.max;
     ctx.globalAlpha = q * 0.55;

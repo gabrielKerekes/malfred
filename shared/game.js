@@ -51,6 +51,22 @@ export const SPELLS = {
 };
 export const SPELL_KEYS = Object.keys(SPELLS);
 
+// Cosmetic wizard looks. The robe keeps the player's colour (it identifies them in a fight);
+// a skin changes the outfit around it: trim colour, staff orb and headwear.
+export const SKINS = [
+  { id: 'classic', name: 'Classic', hat: 'pointed', trim: '#d9b25a', orb: '#ffb066' },
+  { id: 'ember', name: 'Ember Lord', hat: 'horns', trim: '#2a1410', orb: '#ff4a1a' },
+  { id: 'frost', name: 'Frostweaver', hat: 'hood', trim: '#cfefff', orb: '#7fd8ff' },
+  { id: 'shadow', name: 'Shade', hat: 'hood', trim: '#1a1420', orb: '#b06bff' },
+  { id: 'royal', name: 'Archmage', hat: 'crown', trim: '#ffd24d', orb: '#fff1a8' },
+  { id: 'druid', name: 'Grovekeeper', hat: 'antlers', trim: '#6b4a2a', orb: '#8fff7a' },
+];
+export const SKIN_IDS = SKINS.map((s) => s.id);
+
+// Terrain: obstacles that block wizards and projectiles. kind 0 = pillar (tall column),
+// kind 1 = rock (low boulder). Sent in snapshots as O: [[id, kind, x, y, r], ...].
+export const PILLAR = 0, ROCK = 1;
+
 const COLORS = ['#ff5a4d', '#4da6ff', '#5fd35f', '#ffcc33', '#c77dff', '#ff8fd0',
   '#33d6c9', '#ff9933', '#b0e04a', '#8fa3ff', '#e0e0e0', '#c98a5a'];
 const BOT_NAMES = ['Ashka', 'Brimm', 'Cindra', 'Dross', 'Emberly', 'Fumo', 'Grit', 'Halcyn',
@@ -63,6 +79,9 @@ export class Game {
   constructor(mode, opts = {}) {
     this.mode = mode; // 'brawl' | 'rounds'
     this.allSpells = !!opts.allSpells; // dev/testing: humans start with every spell maxed
+    this.tutorial = !!opts.tutorial;   // solo practice: brawl rules, no XP, a passive training dummy
+    this.terrain = opts.terrain ?? 1;  // 0 = flat arena, 1 = some pillars and rocks, 2 = lots
+    this.obstacles = [];               // {id, kind, x, y, r}
     this.tick = 0;
     this.players = new Map();
     this.projs = [];
@@ -74,6 +93,7 @@ export class Game {
     this.playT = 0;
     this.round = 0;
     this.radius = 500;
+    this.spawnSlots = new Map();       // rounds: id -> [x, y, face] start position for this round
     this.winner = 0;
     this.lastDead = 0;
     this.targetScore = 5;
@@ -81,16 +101,18 @@ export class Game {
   }
 
   // ---------- players ----------
-  addPlayer(name, bot = false) {
+  addPlayer(name, bot = false, skin = '') {
     const id = this.nextId++;
     const used = new Set([...this.players.values()].map((p) => p.color));
     const color = COLORS.find((c) => !used.has(c)) || COLORS[id % COLORS.length];
     if (bot) {
       const names = new Set([...this.players.values()].map((p) => p.name));
       name = BOT_NAMES.find((n) => !names.has(n)) || 'Bot ' + id;
+      if (!skin) skin = SKIN_IDS[Math.floor(rnd() * SKIN_IDS.length)];
     }
+    if (!SKIN_IDS.includes(skin)) skin = SKIN_IDS[0];
     const p = {
-      id, name, color, bot, x: 0, y: 0, vx: 0, vy: 0, tx: null, ty: null, mvx: 0, mvy: 0,
+      id, name, color, bot, skin, dummy: false, x: 0, y: 0, vx: 0, vy: 0, tx: null, ty: null, mvx: 0, mvy: 0,
       face: 0, hp: BASE_HP, maxHp: BASE_HP, alive: false, ward: 0, lava: false,
       cd: {}, lv: {}, pts: 0, score: 0, kills: 0, deaths: 0, level: 1, xp: 0,
       lastHitBy: 0, lastHitTick: -999, respawn: 0,
@@ -98,18 +120,27 @@ export class Game {
     this.resetBuild(p);
     this.players.set(id, p);
     if (this.mode === 'brawl') this.spawn(p);
+    else if (this.phase === 'inter') this.spawn(p); // joined mid-countdown: warm up, play next round
     this.dirty = true;
+    return p;
+  }
+
+  // tutorial target: stands still, never casts, never spends points
+  addDummy() {
+    const p = this.addPlayer('', true, 'classic');
+    p.name = 'Training Dummy'; p.dummy = true; p.pts = 0; p.maxHp = p.hp = 150;
     return p;
   }
 
   removePlayer(id) {
     this.players.delete(id);
+    this.spawnSlots.delete(id);
     this.dirty = true;
   }
 
   resetBuild(p) {
     for (const k of SPELL_KEYS) { p.lv[k] = SPELLS[k].start; p.cd[k] = 0; }
-    p.pts = this.mode === 'brawl' ? 2 : 3;
+    p.pts = this.tutorial ? 3 : this.mode === 'brawl' ? 2 : 3;
     p.level = 1; p.xp = 0; p.maxHp = BASE_HP;
     if (this.allSpells && !p.bot) {
       for (const k of SPELL_KEYS) p.lv[k] = SPELLS[k].max;
@@ -118,10 +149,7 @@ export class Game {
   }
 
   spawn(p, x, y) {
-    if (x === undefined) {
-      const a = rnd() * Math.PI * 2, r = this.radius * 0.55 * Math.sqrt(rnd());
-      x = Math.cos(a) * r; y = Math.sin(a) * r;
-    }
+    if (x === undefined) [x, y] = this.freeSpot(this.radius * 0.55, PLAYER_R + 12);
     p.x = x; p.y = y; p.vx = p.vy = 0; p.tx = p.ty = null;
     p.hp = p.maxHp; p.alive = true; p.lava = false;
     p.ward = this.mode === 'brawl' ? Math.round(1.5 * TICK) : 0;
@@ -132,7 +160,7 @@ export class Game {
   // ---------- inputs ----------
   setMove(id, x, y) {
     const p = this.players.get(id);
-    if (!p || !p.alive || this.phase !== 'play') return;
+    if (!p || !p.alive || !this.active()) return;
     p.tx = x; p.ty = y;
   }
 
@@ -150,7 +178,7 @@ export class Game {
 
   cast(id, s, x, y) {
     const p = this.players.get(id), def = SPELLS[s];
-    if (!p || !p.alive || this.phase !== 'play' || !def || def.passive) return;
+    if (!p || !p.alive || !this.active() || !def || def.passive) return;
     const lv = p.lv[s];
     if (!lv || p.cd[s] > 0) return;
     let dx = x - p.x, dy = y - p.y;
@@ -203,6 +231,7 @@ export class Game {
 
   hit(t, ownerId, dmg, dx, dy, kb) {
     if (!t.alive) return;
+    if (this.phase === 'inter') dmg = 0; // warmup between rounds: spells shove but don't hurt
     t.hp -= dmg;
     if (ownerId !== t.id) { t.lastHitBy = ownerId; t.lastHitTick = this.tick; }
     // the more hurt you are, the further you fly
@@ -220,11 +249,81 @@ export class Game {
       if (this.mode === 'brawl') k.xp += 20 + 5 * t.level; else k.pts++;
     }
     this.ev('die', t.id, k ? k.id : 0, Math.round(t.x), Math.round(t.y));
-    if (this.mode === 'brawl') { t.respawn = 3 * TICK; }
+    if (this.mode === 'brawl') { t.respawn = (t.dummy ? 2 : 3) * TICK; }
     this.dirty = true;
   }
 
   alive() { return [...this.players.values()].filter((p) => p.alive); }
+
+  // phases in which wizards can move and cast ('inter' is a damage-free warmup)
+  active() { return this.phase === 'play' || this.phase === 'inter'; }
+
+  // a random point within radius `R` that keeps `gap` clear of every obstacle
+  freeSpot(R, gap) {
+    let x = 0, y = 0;
+    for (let i = 0; i < 30; i++) {
+      const a = rnd() * Math.PI * 2, r = R * Math.sqrt(rnd());
+      x = Math.cos(a) * r; y = Math.sin(a) * r;
+      if (this.obstacles.every((o) => hyp(o.x - x, o.y - y) > o.r + gap)) break;
+    }
+    return [x, y];
+  }
+
+  // ---------- terrain ----------
+  terrainWanted() {
+    const R = this.radius;
+    return this.terrain ? Math.round((R * R / 70000) * (this.terrain === 2 ? 2.2 : 1)) : 0;
+  }
+
+  // Scatter pillars and rocks over the platform, away from spawn points and from each
+  // other (so there is always a way between them). `avoid` = [[x, y], ...].
+  genTerrain(avoid = []) {
+    this.obstacles = [];
+    const want = this.terrainWanted();
+    for (let tries = 0; tries < want * 25 && this.obstacles.length < want; tries++) this.addObstacle(this.radius * 0.82, avoid);
+  }
+
+  addObstacle(maxR, avoid) {
+    const kind = rnd() < 0.4 ? PILLAR : ROCK;
+    const r = kind === PILLAR ? 24 + rnd() * 10 : 18 + rnd() * 12;
+    const a = rnd() * Math.PI * 2, d = maxR * Math.sqrt(rnd());
+    const x = Math.cos(a) * d, y = Math.sin(a) * d;
+    if (avoid.some(([ax, ay]) => hyp(ax - x, ay - y) < r + 70)) return null;
+    if (this.obstacles.some((o) => hyp(o.x - x, o.y - y) < o.r + r + 80)) return null;
+    const o = { id: this.nextId++, kind, x: Math.round(x), y: Math.round(y), r: Math.round(r) };
+    this.obstacles.push(o);
+    return o;
+  }
+
+  // obstacles the shrinking platform no longer holds fall into the lava
+  crumbleTerrain() {
+    const R = this.radius;
+    this.obstacles = this.obstacles.filter((o) => {
+      if (hyp(o.x, o.y) + o.r * 0.4 < R) return true;
+      this.ev('crumble', o.x, o.y, o.r, o.kind);
+      return false;
+    });
+  }
+
+  // brawl: the arena grows and shrinks with the crowd, so keep the scatter in step with it
+  tendTerrain() {
+    this.crumbleTerrain();
+    if (this.tick % (2 * TICK) || this.obstacles.length >= this.terrainWanted()) return;
+    // never drop a pillar on someone's head
+    this.addObstacle(this.radius * 0.82, this.alive().map((p) => [p.x, p.y]));
+  }
+
+  // push a body out of any obstacle it overlaps; bounce off a little if flying
+  collideTerrain(p) {
+    for (const o of this.obstacles) {
+      const dx = p.x - o.x, dy = p.y - o.y, d = hyp(dx, dy), min = o.r + PLAYER_R;
+      if (d >= min) continue;
+      const nx = d > 0.01 ? dx / d : 1, ny = d > 0.01 ? dy / d : 0;
+      p.x = o.x + nx * min; p.y = o.y + ny * min;
+      const vn = p.vx * nx + p.vy * ny;
+      if (vn < 0) { p.vx -= 1.5 * vn * nx; p.vy -= 1.5 * vn * ny; }
+    }
+  }
 
   // ---------- round flow ----------
   start() {
@@ -232,45 +331,65 @@ export class Game {
     if (this.players.size < 2) return false;
     for (const p of this.players.values()) { p.score = 0; p.kills = 0; p.deaths = 0; this.resetBuild(p); }
     this.round = 0;
-    this.intermission(6);
+    this.intermission(10);
     return true;
   }
 
+  // Between rounds: spend points and warm up. Everyone can move and cast, but nothing
+  // hurts; when the countdown ends they're put back on their start spots, fully healed.
   intermission(sec) {
     this.phase = 'inter'; this.phaseT = sec * TICK; this.round++;
     this.projs = []; this.zones = [];
     const n = this.players.size;
-    this.radius = Math.min(700, 400 + 30 * n);
+    this.radius = Math.min(820, 560 + 30 * n);
+    this.spawnSlots.clear();
     let i = 0;
     const off = rnd() * Math.PI * 2;
     for (const p of this.players.values()) {
       if (this.round > 1) p.pts += 2;
       const a = off + (i++ / n) * Math.PI * 2;
-      this.spawn(p, Math.cos(a) * this.radius * 0.6, Math.sin(a) * this.radius * 0.6);
-      p.face = a + Math.PI;
+      this.spawnSlots.set(p.id, [Math.cos(a) * this.radius * 0.6, Math.sin(a) * this.radius * 0.6, a + Math.PI]);
+    }
+    this.genTerrain([...this.spawnSlots.values()]);
+    for (const p of this.players.values()) this.toSlot(p);
+    this.dirty = true;
+  }
+
+  toSlot(p) {
+    const s = this.spawnSlots.get(p.id);
+    this.spawn(p, s[0], s[1]); p.face = s[2];
+  }
+
+  beginRound() {
+    this.phase = 'play'; this.playT = 0;
+    this.projs = []; this.zones = [];
+    for (const p of this.players.values()) {
+      if (this.spawnSlots.has(p.id)) this.toSlot(p);
+      else { p.alive = false; p.tx = p.ty = null; } // joined during the countdown: sits this one out
     }
     this.dirty = true;
   }
 
   toLobby() {
-    this.phase = 'lobby'; this.projs = []; this.zones = [];
+    this.phase = 'lobby'; this.projs = []; this.zones = []; this.obstacles = [];
     for (const p of this.players.values()) p.alive = false;
     this.dirty = true;
   }
 
   stepPhase() {
     if (this.mode === 'brawl') {
-      const target = Math.min(1000, 330 + 55 * this.players.size);
+      const target = Math.min(1100, 400 + 60 * this.players.size);
       this.radius += (target - this.radius) * 0.01;
+      this.tendTerrain();
       return;
     }
     if (this.phase === 'lobby') return;
     if (this.players.size < 2) { this.toLobby(); return; }
     if (this.phase === 'inter') {
-      if (--this.phaseT <= 0) { this.phase = 'play'; this.playT = 0; }
+      if (--this.phaseT <= 0) this.beginRound();
     } else if (this.phase === 'play') {
       this.playT++;
-      if (this.playT > 6 * TICK) this.radius = Math.max(110, this.radius - 7 * DT);
+      if (this.playT > 6 * TICK) { this.radius = Math.max(110, this.radius - 8 * DT); this.crumbleTerrain(); }
       const al = this.alive();
       if (al.length <= 1) {
         const w = al[0] || this.players.get(this.lastDead) || [...this.players.values()][0];
@@ -280,7 +399,7 @@ export class Game {
         if (w.score >= this.targetScore) { this.phase = 'over'; this.phaseT = 9 * TICK; } else { this.phase = 'end'; this.phaseT = 3 * TICK; }
       }
     } else if (this.phase === 'end') {
-      if (--this.phaseT <= 0) this.intermission(11);
+      if (--this.phaseT <= 0) this.intermission(15);
     } else if (this.phase === 'over') {
       if (--this.phaseT <= 0) this.toLobby();
     }
@@ -291,16 +410,19 @@ export class Game {
     this.tick++;
     this.stepPhase();
     const playing = this.phase === 'play';
-    const moving = playing || this.phase === 'end' || this.phase === 'over';
+    const moving = playing || this.phase === 'inter' || this.phase === 'end' || this.phase === 'over';
     const R = this.radius;
     const lavaDps = this.mode === 'brawl' ? 16 : 12 + 0.3 * (this.playT / TICK);
     const fr = Math.exp(-2.6 * DT);
 
     for (const p of this.players.values()) {
-      if (p.bot && (this.tick + p.id * 3) % 8 === 0) this.botThink(p);
+      if (p.bot && !p.dummy && (this.tick + p.id * 3) % 8 === 0) this.botThink(p);
       for (const k of SPELL_KEYS) if (p.cd[k] > 0) p.cd[k]--;
       if (!p.alive) {
-        if (this.mode === 'brawl' && --p.respawn <= 0) { this.resetBuild(p); this.spawn(p); this.dirty = true; }
+        if (this.mode === 'brawl' && --p.respawn <= 0) {
+          if (!this.tutorial) this.resetBuild(p); // the tutorial keeps what you learned
+          this.spawn(p); this.dirty = true;
+        }
         continue;
       }
       if (!moving) continue;
@@ -317,13 +439,15 @@ export class Game {
       }
       p.x += p.vx * DT; p.y += p.vy * DT;
       p.vx *= fr; p.vy *= fr;
+      this.collideTerrain(p);
       p.lava = hyp(p.x, p.y) > R;
       if (p.lava && playing) {
         p.hp -= lavaDps * DT;
         if (p.hp <= 0) { this.kill(p); continue; }
       }
       if (this.mode === 'brawl') {
-        if (!p.lava) p.hp = Math.min(p.maxHp, p.hp + 1.5 * DT);
+        if (!p.lava) p.hp = Math.min(p.maxHp, p.hp + (p.dummy ? 4 : 1.5) * DT);
+        if (this.tutorial) continue;
         p.xp += DT;
         const need = 10 + 6 * p.level;
         if (p.xp >= need) { p.xp -= need; p.level++; p.pts++; p.maxHp += 4; p.hp += 4; this.dirty = true; this.ev('lvl', p.id); }
@@ -342,6 +466,7 @@ export class Game {
         }
       }
     }
+    for (const p of al) this.collideTerrain(p);
 
     // projectiles
     for (const j of this.projs) {
@@ -369,6 +494,12 @@ export class Game {
     for (const j of this.projs) {
       if (j.dead) continue;
       const def = SPELLS[j.type];
+      // pillars and rocks soak up projectiles
+      if (this.obstacles.some((o) => hyp(o.x - j.x, o.y - j.y) < o.r + def.r)) {
+        j.dead = true;
+        this.ev('hit', Math.round(j.x), Math.round(j.y), j.type === 'bolt' ? 0 : 1);
+        continue;
+      }
       for (const t of al) {
         if (t.id === j.owner || !t.alive) continue;
         if (hyp(t.x - j.x, t.y - j.y) > PLAYER_R + def.r) continue;
@@ -434,7 +565,7 @@ export class Game {
       const opts = SPELL_KEYS.filter((k) => p.lv[k] < SPELLS[k].max);
       if (opts.length) this.upgrade(p.id, opts[Math.floor(rnd() * opts.length)]);
     }
-    if (!p.alive || this.phase !== 'play') return;
+    if (!p.alive || !this.active()) return;
     const R = this.radius, d0 = hyp(p.x, p.y);
     const can = (s) => p.lv[s] > 0 && p.cd[s] <= 0;
     let near = null, nd = 1e9;
@@ -458,7 +589,7 @@ export class Game {
         if (hyp(dx, dy) < 150 && dx * j.vx + dy * j.vy > 0 && rnd() < 0.5) { this.cast(p.id, 'ward', p.x, p.y); break; }
       }
     }
-    if (!near) return;
+    if (!near || this.phase !== 'play') return; // bots just stroll around during the warmup
     const aim = (lead, noise) => [
       near.x + near.mvx * lead + (rnd() - 0.5) * noise,
       near.y + near.mvy * lead + (rnd() - 0.5) * noise,
@@ -481,6 +612,7 @@ export class Game {
       rd: this.round, w: this.winner, P,
       J: this.projs.map((j) => [j.id, j.type === 'bolt' ? 0 : 1, Math.round(j.x), Math.round(j.y), j.owner]),
       Z: this.zones.map((z) => [z.id, Math.round(z.x), Math.round(z.y), z.r, z.t]),
+      O: this.obstacles.map((o) => [o.id, o.kind, o.x, o.y, o.r]),
       ev: this.events,
     };
     this.events = [];
@@ -489,7 +621,7 @@ export class Game {
 
   roster() {
     return [...this.players.values()].map((p) => ({
-      id: p.id, name: p.name, color: p.color, bot: p.bot,
+      id: p.id, name: p.name, color: p.color, bot: p.bot, skin: p.skin, dummy: p.dummy,
       score: p.score, kills: p.kills, deaths: p.deaths, level: p.level,
     }));
   }

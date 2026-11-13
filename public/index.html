@@ -18,12 +18,14 @@
     <h1>Malfred</h1>
     <p class="sub"><span>Ashen Ring</span>knock your rivals into the lava</p>
     <input id="name" maxlength="14" placeholder="Your name" autocomplete="off">
+    <div id="skins" role="radiogroup" aria-label="Wizard look"></div>
     <button id="btnBrawl" class="primary">Endless Brawl<small>public free-for-all &middot; grow stronger the longer you survive</small></button>
     <button id="btnCreate">Create Private Room<small>round-based match with friends (and bots)</small></button>
     <div class="row">
       <input id="code" maxlength="4" placeholder="CODE" autocomplete="off">
       <button id="btnJoin">Join Room</button>
     </div>
+    <button id="btnTutorial">Tutorial<small>learn the basics against a training dummy</small></button>
     <p id="err"></p>
     <p class="help"><b>Right-click</b> move &middot; <b>Left-click / Q</b> bolt &middot; <b>W E R D F</b> spells at cursor &middot; <b>S</b> stop<br>
     <b>Shift+key</b> or the <b>+</b> buttons spend upgrade points<br>
@@ -37,6 +39,13 @@
     <div id="feed"></div>
   </div>
   <div id="board"></div>
+  <div id="tut" hidden>
+    <div class="tut-top"><span class="tut-n"></span><b class="tut-h"></b><button class="tut-skip">Skip</button></div>
+    <p class="tut-p"></p>
+    <div class="tut-track"><i class="tut-bar"></i></div>
+    <button class="tut-next primary" hidden>Got it</button>
+    <div class="tut-end row" hidden><button class="tut-brawl primary">Play Endless Brawl</button><button class="tut-menu">Main menu</button></div>
+  </div>
   <div id="banner"></div>
   <div id="lobby" class="card" hidden>
     <h2>Room <span id="lobbyCode"></span></h2>
@@ -45,6 +54,10 @@
     <div id="lobbyList"></div>
     <div class="row" id="botRow">
       <span>Bots</span><button id="botMinus">&minus;</button><b id="botN">0</b><button id="botPlus">+</button>
+    </div>
+    <div class="row" id="terrainRow">
+      <span>Terrain</span>
+      <div class="seg" role="radiogroup" aria-label="Terrain"><button data-n="0">Flat</button><button data-n="1">Some</button><button data-n="2">Lots</button></div>
     </div>
     <button id="btnStart" class="primary">Start Match</button>
     <p id="lobbyNote"></p>
@@ -69,6 +82,7 @@
     <button id="btnResume" class="primary">Resume</button>
     <button id="btnSound">Sound: on (M)</button>
     <button id="btnGfx">Graphics: 3D</button>
+    <button id="btnSkin">Look: Classic</button>
     <button id="btnLeave">Leave game</button>
     <p class="help">The match keeps running while this menu is open.</p>
     <p class="help"><a href="https://github.com/gabrielKerekes/malfred" target="_blank" rel="noopener">Made by Gabriel Kerekes · GitHub</a></p>

@@ -190,6 +190,57 @@ input:focus { outline: none; border-color: var(--ember); box-shadow: 0 0 0 3px #
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
+/* ---------- between rounds: the spell bar becomes a big, centred upgrade shop ---------- */
+#bottom { transition: bottom .35s cubic-bezier(.3, 1.3, .5, 1), transform .35s cubic-bezier(.3, 1.3, .5, 1); }
+#bottom.shop { bottom: 50%; transform: translate(-50%, 50%); }
+#bottom.shop #bar { zoom: 1.6; box-shadow: 0 8px 30px #000a, 0 0 0 1px #ffd24d55, 0 0 40px #ff8a2a44; }
+#bottom.shop #pts { font-size: 20px; }
+#bottom.shop #stats { display: none; }
+#bottom.shop .slot.can-up { cursor: pointer; }
+#bottom.shop .slot.can-up:hover .face { border-color: #ffd24d; box-shadow: inset 0 0 12px #000a, 0 0 14px #ffb30099; }
+@media (max-width: 640px) { #bottom.shop #bar { zoom: 1.25; } }
+@media (max-width: 480px) { #bottom.shop #bar { zoom: 1.1; } }
+
+/* ---------- menu: wizard look picker ---------- */
+#skins { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; }
+.skin { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 2px 5px; border-radius: 9px;
+  background: #150c0a; min-width: 0; }
+.skin canvas { position: static; width: 100%; height: 62px; cursor: inherit; }
+.skin span { font-size: 10px; line-height: 1.15; color: var(--muted); text-align: center; overflow: hidden; text-overflow: ellipsis; max-width: 100%; white-space: nowrap; }
+.skin.on { border-color: var(--ember); background: radial-gradient(circle at 50% 40%, #5a2a14, #1c100c 75%); box-shadow: 0 0 0 1px var(--ember), 0 0 14px #ff8a2a55; }
+.skin.on span { color: var(--ink); font-weight: 650; }
+@media (max-width: 420px) { #skins { grid-template-columns: repeat(3, 1fr); } }
+#btnTutorial.new { border-color: var(--gold); box-shadow: 0 0 0 1px #ffd24d55, 0 0 16px #ffd24d33; }
+#btnTutorial.new::after { content: 'New? Start here'; display: block; font-size: 11px; font-weight: 700; color: var(--gold); }
+
+/* ---------- lobby: terrain toggle ---------- */
+.seg { display: flex; gap: 0; }
+.seg button { padding: 3px 11px; border-radius: 0; margin-left: -1px; }
+.seg button:first-child { border-radius: 8px 0 0 8px; }
+.seg button:last-child { border-radius: 0 8px 8px 0; }
+.seg button.on { background: linear-gradient(#ea6a1e, #b5350a); border-color: #ff9a4a; position: relative; }
+#terrainRow > span, #botRow > span { min-width: 54px; }
+
+/* ---------- tutorial panel ---------- */
+#tut { top: 12px; left: 50%; transform: translateX(-50%); width: min(440px, calc(100% - 24px)); padding: 12px 14px 12px;
+  background: linear-gradient(170deg, #2e1d17f2, #1c110df2); border: 1px solid var(--edge-hot); border-radius: 12px;
+  box-shadow: 0 12px 40px #000c, 0 0 24px #ff8a2a22; display: flex; flex-direction: column; gap: 8px; }
+#tut.pop { animation: tutPop .35s cubic-bezier(.2, 1.5, .4, 1); }
+@keyframes tutPop { from { opacity: 0; transform: translateX(-50%) translateY(-10px) scale(.96); } }
+.tut-top { display: flex; align-items: center; gap: 10px; }
+.tut-n { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.tut-h { flex: 1; color: var(--flame); font-size: 16px; }
+.tut-skip { padding: 2px 9px; font-size: 12px; }
+.tut-p { margin: 0; line-height: 1.45; }
+.tut-p b { color: var(--gold); }
+.tut-track { height: 4px; border-radius: 2px; background: #0007; overflow: hidden; }
+.tut-bar { display: block; height: 100%; background: linear-gradient(90deg, #c2410c, #ffd24d); transition: width .4s; }
+.tut-next { align-self: flex-end; }
+.tut-end { justify-content: flex-end; }
+/* the tutorial panel owns the top centre; push the banner below it */
+#tut:not([hidden]) ~ #banner { top: 30%; }
+@media (max-width: 640px) { #tut { top: 56px; font-size: 13px; } }
+
 /* in-game menu buttons, Esc menu, credit link */
 #sysBtns { bottom: 10px; right: 12px; display: flex; gap: 6px; }
 #sysBtns button { width: 38px; height: 38px; padding: 0; font-size: 17px; background: #241713dd; border-radius: 10px; }

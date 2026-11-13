@@ -12,7 +12,28 @@ Fall off and you burn. It is an original game in the "knockback arena" genre.
 - **Private Room** – create a room, send friends the invite link (`/?room=CODE`),
   optionally add bots, and play a round-based match. The platform shrinks each
   round, the last wizard standing scores, and you spend upgrade points between
-  rounds. First to 5 round wins takes the match.
+  rounds. First to 5 round wins takes the match. During the countdown before
+  each round the spell bar moves to the middle of the screen as an upgrade shop,
+  and everyone can walk around and cast as a warm-up: spells shove but don't hurt.
+  When the round starts, everyone is put back on their start spot at full health.
+- **Tutorial** – a private, guided practice against a Training Dummy: moving, the
+  camera, bolts, knockback, learning spells, Shockwave, Blink, and finishing
+  someone off in the lava.
+
+## Arena terrain
+
+Pillars and rocks are scattered over the platform. They block wizards and soak up
+projectiles (area spells like Shockwave and Meteor go around them), so you can use
+them as cover. As the platform shrinks, any that end up at the edge crumble into
+the lava. The room host picks *Flat*, *Some* or *Lots* in the lobby. Endless Brawl
+always uses *Some*.
+
+## Wizard looks
+
+Pick a look on the main menu, or cycle through them in the Esc menu during a game:
+Classic, Ember Lord, Frostweaver, Shade, Archmage and Grovekeeper. Each look changes
+the trim, the staff orb and the headwear. Your robe always keeps your fighter
+colour so you stay easy to spot.
 
 ## Controls
 
@@ -82,6 +103,7 @@ The server listens on `$PORT` (default 3000).
 - `server.js` – HTTP static server, rooms, WebSocket protocol, 30 Hz game loop
 - `public/` – browser client (no framework, no bundler)
   - `client.js` – connection, HUD, input; `camera.js` – free camera (2D and tilted 3D projection)
+  - `tutorial.js` – the guided tutorial steps and their completion checks
   - `render3d.js` – three.js renderer; `render.js` – 2D canvas renderer
   - `vendor/three/` – vendored three.js **0.187.0** (MIT): `three.module.min.js` / `three.core.min.js`
     (minified from the npm build with esbuild) plus the addons used (GLTFLoader, SkeletonUtils,

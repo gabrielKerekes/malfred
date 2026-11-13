@@ -1,11 +1,12 @@
-import { SPELLS, SPELL_KEYS, TICK } from '/shared/game.js';
+import { SPELLS, SPELL_KEYS, TICK, SKINS, SKIN_IDS } from '/shared/game.js';
 import { sfx, setListener, setSizzle, toggleMute, isMuted } from './audio.js';
 import { cam, toWorld, updateCamera, drawCameraHud, touchGesture, setProjection } from './camera.js';
 import {
   drawLava, drawArena, drawZones, drawPlayers, drawProjectiles, drawEffects, drawVignette, drawBackdrop as paintBackdrop,
-  fxEvent, resetFx, shakeOffset,
+  fxEvent, resetFx, shakeOffset, drawTerrain, drawTerrainTops, drawSkinPreview,
 } from './render.js';
 import { ICONS, FEED_KILL, FEED_LAVA } from './icons.js';
+import { createTutorial } from './tutorial.js';
 
 const $ = (id) => document.getElementById(id);
 const cv = $('c'), ctx = cv.getContext('2d');
@@ -14,7 +15,7 @@ for (const k of SPELL_KEYS) KEYMAP[SPELLS[k].key.toLowerCase()] = k;
 const INTERP = 110; // ms of render delay used to smooth snapshots
 
 
-let ws = null, myId = 0, mode = '', code = '', host = 0, botsWanted = 0;
+let ws = null, myId = 0, mode = '', code = '', host = 0, botsWanted = 0, terrain = 1;
 let roster = new Map();
 let snaps = [];            // {time, s, P: Map}
 let me = null;             // private state: pts, lv, cd
@@ -63,16 +64,57 @@ $('name').value = localStorage.getItem('malfred-name') || '';
 const urlRoom = new URLSearchParams(location.search).get('room');
 if (urlRoom) $('code').value = urlRoom.toUpperCase();
 
+// ---------------- wizard look ----------------
+// The robe takes your fighter colour in game; the menu previews it in a neutral one.
+const PREVIEW_COLOR = '#4da6ff';
+let skin = 'classic';
+try { const v = localStorage.getItem('malfred-skin'); if (SKIN_IDS.includes(v)) skin = v; } catch {}
+const skinCards = SKINS.map((k) => {
+  const b = document.createElement('button');
+  b.className = 'skin'; b.type = 'button'; b.setAttribute('role', 'radio'); b.title = k.name;
+  const c = document.createElement('canvas');
+  const l = document.createElement('span'); l.textContent = k.name;
+  b.append(c, l);
+  b.onclick = () => setSkin(k.id);
+  $('skins').appendChild(b);
+  return { id: k.id, b, c };
+});
+function setSkin(id) {
+  skin = id;
+  try { localStorage.setItem('malfred-skin', id); } catch {}
+  for (const k of skinCards) { k.b.classList.toggle('on', k.id === id); k.b.setAttribute('aria-checked', k.id === id); }
+  $('btnSkin').textContent = `Look: ${SKINS.find((k) => k.id === id).name}`;
+  send({ t: 'skin', s: id });
+}
+function drawSkinCards(now) {
+  const dpr = Math.min(2, devicePixelRatio || 1);
+  for (const k of skinCards) {
+    const w = Math.round(k.c.clientWidth * dpr), h = Math.round(k.c.clientHeight * dpr);
+    if (!w || !h) continue;
+    if (k.c.width !== w || k.c.height !== h) { k.c.width = w; k.c.height = h; }
+    drawSkinPreview(k.c, PREVIEW_COLOR, k.id, now);
+  }
+}
+$('btnSkin').onclick = () => setSkin(SKIN_IDS[(SKIN_IDS.indexOf(skin) + 1) % SKIN_IDS.length]);
+
+// ---------------- tutorial ----------------
+const tut = createTutorial($('tut'), {
+  onBrawl: () => { leaveGame(); connect({ t: 'join', mode: 'brawl' }); },
+  onMenu: () => leaveGame(),
+});
+try { if (localStorage.getItem('malfred-tutorial') !== 'done') $('btnTutorial').classList.add('new'); } catch {}
+
 function connect(joinMsg) {
   $('err').textContent = 'Connecting…';
   localStorage.setItem('malfred-name', $('name').value);
   joinMsg.name = $('name').value;
+  joinMsg.skin = skin;
   const sock = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
   sock.onopen = () => sock.send(JSON.stringify(joinMsg));
   sock.onmessage = (e) => onMsg(JSON.parse(e.data), sock);
   sock.onclose = () => {
     if (ws === sock) {
-      ws = null; $('hud').hidden = true; $('pause').hidden = true; $('menu').style.display = '';
+      ws = null; $('hud').hidden = true; $('pause').hidden = true; $('menu').style.display = ''; tut.stop();
       r3d?.setActive(false);
       setSizzle(false);
       $('err').textContent = 'Disconnected from server.';
@@ -82,9 +124,11 @@ function connect(joinMsg) {
 $('btnBrawl').onclick = () => connect({ t: 'join', mode: 'brawl' });
 $('btnCreate').onclick = () => connect({ t: 'join', mode: 'create' });
 $('btnJoin').onclick = () => connect({ t: 'join', mode: 'room', code: $('code').value });
+$('btnTutorial').onclick = () => connect({ t: 'join', mode: 'tutorial' });
 $('code').onkeydown = (e) => { if (e.key === 'Enter') $('btnJoin').click(); };
 
 const send = (o) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); };
+setSkin(skin);
 
 function onMsg(m, sock) {
   if (m.t === 'err') { $('err').textContent = m.m; sock.close(); return; }
@@ -99,11 +143,12 @@ function onMsg(m, sock) {
       $('link').value = link; $('lobbyCode').textContent = code;
     } else {
       history.replaceState(null, '', location.pathname);
-      $('roomInfo').textContent = 'Endless Brawl';
+      $('roomInfo').textContent = mode === 'tutorial' ? 'Tutorial' : 'Endless Brawl';
     }
+    if (mode === 'tutorial') tut.start(); else tut.stop();
     buildBar();
   } else if (m.t === 'roster') {
-    host = m.host; botsWanted = m.bots;
+    host = m.host; botsWanted = m.bots; terrain = m.terrain ?? terrain;
     roster = new Map(m.list.map((p) => [p.id, p]));
     drawBoard(); drawLobby();
   } else if (m.t === 's') {
@@ -118,6 +163,7 @@ function onMsg(m, sock) {
     if (pendingEv.length > 400) pendingEv.splice(0, pendingEv.length - 400); // rAF is paused in hidden tabs
     const phaseChanged = !cur || cur.ph !== s.ph;
     cur = s; me = m.me;
+    if (mode === 'tutorial') tut.snapshot(s, me, myId, roster);
     updateBar();
     updateBanner();
     if (phaseChanged) drawLobby();
@@ -161,7 +207,7 @@ function leaveGame() {
   const sock = ws;
   ws = null; // so onclose doesn't report "Disconnected"
   if (sock) sock.close();
-  showPause(false); setSizzle(false);
+  showPause(false); setSizzle(false); tut.stop();
   $('hud').hidden = true; $('lobby').hidden = true; $('menu').style.display = '';
   $('err').textContent = '';
   history.replaceState(null, '', location.pathname);
@@ -174,6 +220,7 @@ $('btnCopy').onclick = () => { navigator.clipboard?.writeText($('link').value).c
 $('btnStart').onclick = () => send({ t: 'start' });
 $('botMinus').onclick = () => send({ t: 'bots', n: botsWanted - 1 });
 $('botPlus').onclick = () => send({ t: 'bots', n: botsWanted + 1 });
+for (const b of $('terrainRow').querySelectorAll('button')) b.onclick = () => send({ t: 'terrain', n: +b.dataset.n });
 
 function drawLobby() {
   const show = mode === 'rounds' && cur && cur.ph === 'lobby';
@@ -188,6 +235,10 @@ function drawLobby() {
   const isHost = host === myId;
   $('botN').textContent = botsWanted;
   $('botMinus').disabled = $('botPlus').disabled = !isHost;
+  for (const b of $('terrainRow').querySelectorAll('button')) {
+    const on = +b.dataset.n === terrain;
+    b.disabled = !isHost; b.classList.toggle('on', on); b.setAttribute('aria-checked', on);
+  }
   $('btnStart').disabled = !isHost || roster.size < 2;
   $('lobbyNote').textContent = isHost
     ? (roster.size < 2 ? 'Need at least 2 fighters — add a bot or invite a friend.' : 'First to 5 round wins takes the match.')
@@ -196,7 +247,7 @@ function drawLobby() {
 
 // ---------------- HUD ----------------
 function drawBoard() {
-  const brawl = mode === 'brawl';
+  const brawl = mode !== 'rounds';
   const list = [...roster.values()].sort((a, b) => brawl ? (b.level - a.level || b.kills - a.kills) : (b.score - a.score || b.kills - a.kills));
   const t = document.createElement('table');
   const hd = t.insertRow();
@@ -228,7 +279,8 @@ function buildBar() {
       + `<div class="tip"><div class="tt"><b>${d.name}</b><kbd>${d.key}</kbd></div><p>${d.desc}</p><div class="tl"></div></div>`;
     const up = el.querySelector('.up');
     up.onclick = (e) => { e.stopPropagation(); send({ t: 'up', s: k }); };
-    if (!d.passive) el.onclick = () => castAtNearest(k);
+    // between rounds the bar is the upgrade shop: clicking a slot learns / levels it
+    el.onclick = () => { if (shopping()) send({ t: 'up', s: k }); else if (!d.passive) castAtNearest(k); };
     slots[k] = { el, lv: el.querySelector('.lv'), cd: el.querySelector('.cdm'), cdt: el.querySelector('.cdt'), tl: el.querySelector('.tl'), up, last: '', p: -1, txt: '' };
     $('bar').appendChild(el);
   }
@@ -263,7 +315,9 @@ function updateBar() {
     const txt = left > 0 ? (sec >= 1 ? String(Math.ceil(sec)) : sec.toFixed(1)) : '';
     if (txt !== s.txt) { s.txt = txt; s.cdt.textContent = txt; }
   }
-  const t = me.pts > 0 ? `${me.pts} upgrade point${me.pts > 1 ? 's' : ''}: click + or Shift+key` : '';
+  const shop = shopping();
+  $('bottom').classList.toggle('shop', shop);
+  const t = me.pts > 0 ? `${me.pts} upgrade point${me.pts > 1 ? 's' : ''}: ${shop ? 'click a spell' : 'click +'} or Shift+key` : '';
   if (mode === 'brawl') {
     $('xp').hidden = false;
     $('xpFill').style.width = `${Math.min(100, (100 * me.xp) / me.need)}%`;
@@ -273,6 +327,10 @@ function updateBar() {
   $('pts').textContent = t;
   $('pts').classList.toggle('glow', me.pts > 0);
 }
+
+// Between rounds, while there are points to spend, the spell bar grows and moves to the
+// middle of the screen. Once they're spent it goes back down so you can warm up.
+function shopping() { return mode === 'rounds' && cur?.ph === 'inter' && me?.pts > 0; }
 
 const setText = (id, t) => { const el = $(id); if (el.textContent !== t) el.textContent = t; };
 // my health bar: numbers + colour by fraction; the pale "lag" part shows recent damage
@@ -296,11 +354,11 @@ function updateBanner() {
   const wn = roster.get(cur.w)?.name || 'Nobody';
   let h = '', sub = '';
   if (mode === 'rounds') {
-    if (cur.ph === 'inter') { h = `Round ${cur.rd} in ${cur.pt}`; sub = 'Spend your upgrade points!'; }
+    if (cur.ph === 'inter') { h = `Round ${cur.rd} in ${cur.pt}`; sub = me?.pts > 0 ? 'Spend your upgrade points!' : 'Warm-up: spells shove but don\u2019t hurt yet'; }
     else if (cur.ph === 'end') h = `${wn} wins the round`;
     else if (cur.ph === 'over') { h = `🏆 ${wn} wins the match!`; sub = `Back to lobby in ${cur.pt}`; }
     else if (cur.ph === 'play' && !alive) sub = 'You are out — spectating until next round';
-  } else if (!alive) { h = 'Burned!'; sub = 'Respawning with a fresh build…'; }
+  } else if (!alive) { h = 'Burned!'; sub = mode === 'tutorial' ? 'Respawning…' : 'Respawning with a fresh build…'; }
   const sig = h + '|' + sub;
   if (b.dataset.sig !== sig) {
     const headChanged = (b.dataset.h || '') !== h;
@@ -379,6 +437,7 @@ addEventListener('keydown', (e) => {
   if (e.key === 'Escape') { showPause($('pause').hidden); e.preventDefault(); return; }
   if (!$('pause').hidden) return; // no casting from behind the menu
   const k = e.key.toLowerCase();
+  if (mode === 'tutorial') tut.key(e.key);
   // digits change with Shift held, so match passives by physical key
   const spell = KEYMAP[k] || (e.code === 'Digit1' ? 'vigor' : e.code === 'Digit2' ? 'swift' : null);
   if (spell) {
@@ -485,6 +544,7 @@ function frame(now) {
   drawLava(ctx, now, view);
   drawArena(ctx, radius, now);
   drawZones(ctx, a, b, f, now);
+  drawTerrain(ctx, b.O || [], now);
 
   if (moveMark && now - moveMark.t < 400) {
     const q = (now - moveMark.t) / 400;
@@ -494,6 +554,7 @@ function frame(now) {
 
   drawPlayers(ctx, players, roster, myId, now, dt);
   drawProjectiles(ctx, a, b, f, myId, now);
+  drawTerrainTops(ctx, b.O || [], players, now);
   drawEffects(ctx, dt, now, view, radius);
   ctx.restore();
   drawVignette(ctx, W, H, now);
@@ -502,5 +563,8 @@ function frame(now) {
   drawCameraHud(ctx, roster.get(myId)?.color);
 }
 
-function drawBackdrop(now) { paintBackdrop(ctx, now, W, H); }
+function drawBackdrop(now) {
+  paintBackdrop(ctx, now, W, H);
+  if ($('menu').style.display !== 'none') drawSkinCards(now);
+}
 requestAnimationFrame(frame);
